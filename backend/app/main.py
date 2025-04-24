@@ -21,7 +21,7 @@ class MenuResponse(BaseModel):
 
 # --- FastAPI App Initialization ---
 app = FastAPI(
-    title="AI Subject Explorer Backend",
+    title="AI Subject Explorer Backend Test1",
     description="API for the AI Subject Explorer.",
     version="0.1.0",
 )
