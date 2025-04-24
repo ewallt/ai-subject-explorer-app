@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
-// Import the mock API functions
-import { startSession, selectMenuItem } from './services/api';
+// Import the API functions (which now use real fetch)
+import { startSession, selectMenuItem } from './services/api.js';
 // Import the UI components
 import TopicInput from './components/TopicInput.jsx';
 import MenuList from './components/MenuList.jsx';
 // Import CSS
 import './index.css';
+
+// Get API Base URL (needs to be accessible in this scope)
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 function App() {
   // State variables (remain the same)
@@ -14,11 +17,33 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [currentTopic, setCurrentTopic] = useState('');
-  const [history, setHistory] = useState([]); // Simple history tracking
+  const [history, setHistory] = useState([]);
 
-  // --- API Call Handlers (Now use imported mock functions) ---
+  // --- API Call Handlers ---
   const handleTopicSubmit = async (topic) => {
     console.log("Submitting topic:", topic);
+
+    // --- Wake-up Call (Added) ---
+    // Send a simple GET request first to wake up the free tier service
+    console.log("Sending wake-up GET request to backend...");
+    try {
+        // We use fetch but don't necessarily need to wait or check the result closely.
+        // Added a short timeout to prevent waiting too long if backend is slow/down.
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout for wake-up
+
+        await fetch(`${API_BASE_URL}/`, { signal: controller.signal }); // Hit the root endpoint
+
+        clearTimeout(timeoutId); // Clear timeout if fetch returns quickly
+        console.log("Wake-up request attempt finished.");
+    } catch (wakeError) {
+        // Log the error but continue anyway - the main request might still work
+        // This often happens if the fetch times out or fails while server wakes
+        console.warn("Wake-up request failed or timed out (server might still be starting):", wakeError);
+    }
+    // --- End Wake-up Call ---
+
+    // Now proceed with the actual session request
     setIsLoading(true);
     setError(null);
     setSessionId(null); // Reset session
@@ -27,22 +52,23 @@ function App() {
     setCurrentTopic(topic);
 
     try {
-      // Call the imported mock function
+      // Call the imported function (which uses real fetch)
       const data = await startSession(topic);
       setSessionId(data.session_id);
       setMenuItems(data.menu_items);
-      setHistory([`Topic: ${topic}`]); // Start history
-      console.log("Mock session started:", data.session_id);
+      setHistory([`Topic: ${topic}`]);
+      console.log("Real session started:", data.session_id);
     } catch (err) {
        const errorMsg = err.message || 'Failed to start session.';
        setError(errorMsg);
-       console.error("Error in handleTopicSubmit:", err);
+       console.error("Error in handleTopicSubmit calling startSession:", err);
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleMenuSelection = async (selection) => {
+    // (Logic remains the same - calls selectMenuItem from api.js)
     console.log("Selecting menu item:", selection);
     if (!sessionId) {
         setError("No active session.");
@@ -51,21 +77,18 @@ function App() {
     }
     setIsLoading(true);
     setError(null);
-
     try {
-       // Call the imported mock function
       const data = await selectMenuItem(sessionId, selection);
       setMenuItems(data.menu_items);
-      setHistory(prev => [...prev, `Selected: ${selection}`]); // Update history
-      console.log("Mock menu updated");
+      setHistory(prev => [...prev, `Selected: ${selection}`]);
+      console.log("Menu updated via API");
     } catch (err) {
       const errorMsg = err.message || 'Failed to process selection.';
       setError(errorMsg);
-      console.error("Error in handleMenuSelection:", err);
-       // If session expired or invalid based on mock error (if implemented)
-       if (err.message && err.message.toLowerCase().includes("session id not found")) {
-           handleReset(); // Reset the UI
-           setError("Session expired or invalid. Please start again."); // Keep specific error
+      console.error("Error in handleMenuSelection calling selectMenuItem:", err);
+       if (err.message && (err.message.includes("Session ID not found") || err.message.includes("404"))) {
+           handleReset();
+           setError("Session expired or invalid. Please start again.");
        }
     } finally {
       setIsLoading(false);
@@ -83,11 +106,12 @@ function App() {
       setIsLoading(false);
   }
 
-  // --- Render Logic (Now uses imported components) ---
+  // --- Render Logic (Uses imported components) ---
   return (
     <div className="container mx-auto p-4 max-w-2xl font-sans">
       <header className="text-center mb-6 border-b pb-4">
-        <h1 className="text-3xl font-bold text-blue-700">AI Subject Explorer Template</h1>
+        {/* You can test deployment here too: */}
+        <h1 className="text-3xl font-bold text-blue-700">AI Subject Explorer (APP)</h1>
         {sessionId && (
              <button
                 onClick={handleReset}
@@ -100,22 +124,19 @@ function App() {
 
       <main>
         {isLoading && <div className="text-center p-4 text-blue-500 font-semibold">Loading...</div>}
-
         {error && <div className="text-center p-3 mb-4 bg-red-100 text-red-700 rounded border border-red-300">Error: {error}</div>}
 
-        {/* Use TopicInput component when no session */}
+        {/* Use TopicInput component */}
         {!isLoading && !error && !sessionId && (
           <TopicInput onSubmit={handleTopicSubmit} />
         )}
 
-        {/* Use MenuList component when session and menu items exist */}
+        {/* Use MenuList component */}
         {!isLoading && !error && sessionId && menuItems.length > 0 && (
           <div className="mt-4">
-            {/* Display history path */}
             <div className='text-sm text-gray-600 mb-3 border-b pb-2'>
                 Path: {history.join(' → ')}
             </div>
-            {/* Pass items and handler to MenuList component */}
             <MenuList items={menuItems} onSelect={handleMenuSelection} />
           </div>
         )}
