@@ -1,3 +1,4 @@
+# This is the state BEFORE adding the __BACK__ logic (v3)
 import os
 import uuid
 import json
@@ -22,7 +23,7 @@ class SessionResponse(BaseModel):
 class MenuSelection(BaseModel):
     """Model for receiving a menu selection from the frontend."""
     session_id: str
-    selection: str # Can be a menu item or "__BACK__"
+    selection: str # Does NOT handle "__BACK__" in this version
 
 class MenuResponse(BaseModel):
     """
@@ -221,13 +222,14 @@ async def create_session(topic_input: TopicInput):
     return SessionResponse(session_id=session_id, menu_items=main_menu_items)
 
 
-# *** UPDATED /menus endpoint to handle __BACK__ ***
-@app.post("/menus", response_model=MenuResponse, status_code=200, summary="Process menu selection or back navigation", tags=["Navigation"])
+# *** /menus endpoint from v3 (Content Gen, No Back) ***
+@app.post("/menus", response_model=MenuResponse, status_code=200, summary="Process menu selection and get next items", tags=["Navigation"])
 async def select_menu_item(menu_selection: MenuSelection):
     """
-    Processes a user's menu selection OR a special '__BACK__' command.
-    Determines action based on selection and current depth.
-    Calls appropriate AI functions and returns the result.
+    Processes a user's menu selection.
+    Determines whether to fetch a submenu or content based on the current depth.
+    Calls the appropriate AI function and returns the result.
+    (Does NOT handle __BACK__ command)
     """
     session_id = menu_selection.session_id
     selection = menu_selection.selection
@@ -236,131 +238,75 @@ async def select_menu_item(menu_selection: MenuSelection):
     # 1. Retrieve session state
     if session_id not in sessions:
         print(f"ERROR in /menus: Session ID '{session_id}' not found.")
-        raise HTTPException(status_code=404, detail={"error": {"code": "SESSION_NOT_FOUND", "message": "Session ID not found."}})
+        raise HTTPException(status_code=404, detail={"error": {"code": "SESSION_NOT_FOUND", "message": "Session ID not found. It might have expired or is invalid."}})
     session_data = sessions[session_id]
 
-    # 2. Retrieve necessary info from session
+    # 2. Validate selection against the current menu stored in the session
+    current_menu_in_session = session_data.get("current_menu", [])
+    if selection not in current_menu_in_session:
+        print(f"ERROR in /menus: Selection '{selection}' not found in current menu: {current_menu_in_session}")
+        raise HTTPException(status_code=400, detail={"error": {"code": "INVALID_SELECTION", "message": f"Selection '{selection}' is not a valid option in the current menu."}})
+
+    # 3. Retrieve necessary info from session
+    max_menu_depth = session_data.get("max_menu_depth")
     topic = session_data.get("topic", "Unknown Topic")
     current_history = session_data.get("history", [])
-    max_menu_depth = session_data.get("max_menu_depth")
+
     if max_menu_depth is None or not isinstance(max_menu_depth, int):
-         print(f"ERROR in /menus: max_menu_depth missing/invalid for session '{session_id}'.")
-         raise HTTPException(status_code=500, detail={"error": {"code": "INTERNAL_SERVER_ERROR", "message": "Session state missing depth."}})
+         print(f"ERROR in /menus: max_menu_depth missing or invalid in session data for session '{session_id}'.")
+         raise HTTPException(status_code=500, detail={"error": {"code": "INTERNAL_SERVER_ERROR", "message": "Session state is missing menu depth information."}})
+
+    current_level = len(current_history)
+    print(f"--- Current Level: {current_level}, Max Depth: {max_menu_depth} ---")
 
     response = None # Initialize response variable
 
-    # --- Handle Back Navigation FIRST ---
-    if selection == "__BACK__":
-        print("--- Handling Go Back request ---")
-        if len(current_history) <= 1:
-            # Cannot go back from the initial topic/menu
-            print("--- Cannot go back further (already at root). ---")
-            # Return the current menu state without changing history
-            return MenuResponse(type="submenu", menu_items=session_data.get("current_menu", []), content_markdown=None)
+    # 4. Determine action based on level vs max_depth
+    try:
+        if current_level < max_menu_depth:
+            # Generate Submenu
+            print(f"--- Generating AI submenu (Level {current_level + 1}) for selection: '{selection}' ---")
+            if not openai_client: raise ConnectionAbortedError("OpenAI client not available for submenu.")
 
-        # Remove the last step from history
-        new_history = current_history[:-1]
-        session_data["history"] = new_history
-        new_level = len(new_history)
-        previous_menu_items = []
+            submenu_items = generate_submenu_with_ai(topic, selection)
+            if not submenu_items: raise ValueError("AI submenu generation returned empty list")
 
-        try:
-            if new_level == 1: # Went back to the initial topic level
-                print("--- Regenerating main menu (Level 1) ---")
-                # Call main menu AI, but we only need the items, ignore depth
-                previous_menu_items, _ = generate_main_menu_with_ai(topic)
-            else: # Went back to a previous submenu level
-                # Get the selection that led to the *previous* level
-                previous_selection = new_history[-1][1] # Get value from last tuple in new history
-                print(f"--- Regenerating submenu (Level {new_level}) for previous selection: '{previous_selection}' ---")
-                previous_menu_items = generate_submenu_with_ai(topic, previous_selection)
-
-            if not previous_menu_items:
-                raise ValueError("AI generation for previous menu returned empty list")
-
-            # Update session state with the regenerated previous menu
-            session_data["current_menu"] = previous_menu_items
+            new_history = current_history + [("menu_selection", selection)]
+            session_data["history"] = new_history
+            session_data["current_menu"] = submenu_items
             sessions[session_id] = session_data
-            print(f"--- Session '{session_id}' updated. Navigated back (Level {new_level}). ---")
+            print(f"--- Session '{session_id}' updated. Submenu generated (Level {current_level+1}). ---")
+            response = MenuResponse(type="submenu", menu_items=submenu_items, content_markdown=None)
 
-            # Prepare response (always submenu when going back)
-            response = MenuResponse(type="submenu", menu_items=previous_menu_items, content_markdown=None)
+        elif current_level >= max_menu_depth:
+            # Generate Content
+            print(f"--- Generating AI content (Level {current_level + 1}) for selection: '{selection}' ---")
+            if not openai_client: raise ConnectionAbortedError("OpenAI client not available for content.")
 
-        # Handle potential AI errors during back navigation regeneration
-        except (ConnectionRefusedError, ConnectionAbortedError, ConnectionError, RuntimeError, ValueError) as e:
-            status_code = 503; error_code = "AI_GENERATION_FAILED"
-            # Map specific errors... (same mapping as below)
-            if isinstance(e, ConnectionRefusedError): status_code, error_code = 401, "AI_AUTH_ERROR"
-            elif isinstance(e, ConnectionAbortedError): status_code, error_code = 429, "AI_RATE_LIMIT"
-            elif isinstance(e, ConnectionError): status_code, error_code = 504, "AI_CONNECTION_ERROR"
-            elif isinstance(e, ValueError): status_code, error_code = 502, "AI_BAD_RESPONSE"
-            elif isinstance(e, RuntimeError): status_code, error_code = 502, "AI_API_ERROR"
-            print(f"ERROR in /menus regenerating previous menu for back navigation: {e}")
-            # Restore history before raising error? Or leave state potentially inconsistent? Let's leave it for now.
-            # session_data["history"] = current_history # Option: Restore history
-            raise HTTPException(status_code=status_code, detail={"error": {"code": error_code, "message": f"Failed to regenerate previous menu: {e}"}})
-        except Exception as e:
-            print(f"ERROR in /menus unexpected during back navigation: {e}")
-            raise HTTPException(status_code=500, detail={"error": {"code": "BACK_NAVIGATION_FAILED", "message": "Unexpected error during back navigation."}})
+            selection_path = [item[1] for item in current_history if item[0] == 'menu_selection'] + [selection]
+            content_markdown, further_topics = generate_content_and_further_topics(topic, selection_path)
+            if not content_markdown or not further_topics: raise ValueError("AI content generation returned empty content/topics")
 
-    # --- Handle Regular Menu Selection ---
-    else:
-        # 3. Validate selection (only if not "__BACK__")
-        current_menu_in_session = session_data.get("current_menu", [])
-        if selection not in current_menu_in_session:
-            print(f"ERROR in /menus: Selection '{selection}' not found in current menu: {current_menu_in_session}")
-            raise HTTPException(status_code=400, detail={"error": {"code": "INVALID_SELECTION", "message": f"Selection '{selection}' is not a valid option."}})
+            new_history = current_history + [("menu_selection", selection)]
+            session_data["history"] = new_history
+            session_data["current_menu"] = further_topics
+            sessions[session_id] = session_data
+            print(f"--- Session '{session_id}' updated. AI Content generated (Level {current_level+1}). ---")
+            response = MenuResponse(type="content", menu_items=further_topics, content_markdown=content_markdown)
 
-        # 4. Determine action based on level vs max_depth
-        current_level = len(current_history)
-        print(f"--- Current Level: {current_level}, Max Depth: {max_menu_depth} ---")
-
-        try:
-            if current_level < max_menu_depth:
-                # Generate Submenu
-                print(f"--- Generating AI submenu (Level {current_level + 1}) for selection: '{selection}' ---")
-                if not openai_client: raise ConnectionAbortedError("OpenAI client unavailable.")
-
-                submenu_items = generate_submenu_with_ai(topic, selection)
-                if not submenu_items: raise ValueError("AI submenu generation returned empty list")
-
-                new_history = current_history + [("menu_selection", selection)]
-                session_data["history"] = new_history
-                session_data["current_menu"] = submenu_items
-                sessions[session_id] = session_data
-                print(f"--- Session '{session_id}' updated. Submenu generated (Level {current_level+1}). ---")
-                response = MenuResponse(type="submenu", menu_items=submenu_items, content_markdown=None)
-
-            elif current_level >= max_menu_depth:
-                # Generate Content
-                print(f"--- Generating AI content (Level {current_level + 1}) for selection: '{selection}' ---")
-                if not openai_client: raise ConnectionAbortedError("OpenAI client unavailable.")
-
-                selection_path = [item[1] for item in current_history if item[0] == 'menu_selection'] + [selection]
-                content_markdown, further_topics = generate_content_and_further_topics(topic, selection_path)
-                if not content_markdown or not further_topics: raise ValueError("AI content generation returned empty content/topics")
-
-                new_history = current_history + [("menu_selection", selection)]
-                session_data["history"] = new_history
-                session_data["current_menu"] = further_topics
-                sessions[session_id] = session_data
-                print(f"--- Session '{session_id}' updated. AI Content generated (Level {current_level+1}). ---")
-                response = MenuResponse(type="content", menu_items=further_topics, content_markdown=content_markdown)
-
-        # Handle potential AI and other errors
-        except (ConnectionRefusedError, ConnectionAbortedError, ConnectionError, RuntimeError, ValueError) as e:
-            status_code = 503; error_code = "AI_GENERATION_FAILED"
-            # Map specific errors... (same mapping as above)
-            if isinstance(e, ConnectionRefusedError): status_code, error_code = 401, "AI_AUTH_ERROR"
-            elif isinstance(e, ConnectionAbortedError): status_code, error_code = 429, "AI_RATE_LIMIT"
-            elif isinstance(e, ConnectionError): status_code, error_code = 504, "AI_CONNECTION_ERROR"
-            elif isinstance(e, ValueError): status_code, error_code = 502, "AI_BAD_RESPONSE"
-            elif isinstance(e, RuntimeError): status_code, error_code = 502, "AI_API_ERROR"
-            print(f"ERROR in /menus processing selection: {e}")
-            raise HTTPException(status_code=status_code, detail={"error": {"code": error_code, "message": str(e)}})
-        except Exception as e:
-            print(f"ERROR in /menus unexpected: {e}")
-            raise HTTPException(status_code=500, detail={"error": {"code": "MENU_PROCESSING_FAILED", "message": "Unexpected server error processing selection."}})
+    # Handle potential AI and other errors
+    except (ConnectionRefusedError, ConnectionAbortedError, ConnectionError, RuntimeError, ValueError) as e:
+        status_code = 503; error_code = "AI_GENERATION_FAILED"
+        if isinstance(e, ConnectionRefusedError): status_code, error_code = 401, "AI_AUTH_ERROR"
+        elif isinstance(e, ConnectionAbortedError): status_code, error_code = 429, "AI_RATE_LIMIT"
+        elif isinstance(e, ConnectionError): status_code, error_code = 504, "AI_CONNECTION_ERROR"
+        elif isinstance(e, ValueError): status_code, error_code = 502, "AI_BAD_RESPONSE"
+        elif isinstance(e, RuntimeError): status_code, error_code = 502, "AI_API_ERROR"
+        print(f"ERROR in /menus processing selection: {e}")
+        raise HTTPException(status_code=status_code, detail={"error": {"code": error_code, "message": str(e)}})
+    except Exception as e:
+        print(f"ERROR in /menus unexpected: {e}")
+        raise HTTPException(status_code=500, detail={"error": {"code": "MENU_PROCESSING_FAILED", "message": "Unexpected server error processing selection."}})
 
     # 5. Return the prepared response
     if response:
@@ -377,4 +323,3 @@ if __name__ == "__main__":
     print("--- Starting Uvicorn server (likely for local testing) ---")
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
-
