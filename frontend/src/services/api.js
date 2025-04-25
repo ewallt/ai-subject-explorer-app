@@ -82,3 +82,38 @@ export const selectMenuItem = async (sessionId, selection) => {
         throw new Error(error.message || "Network error or invalid response from server.");
     }
 };
+
+/**
+ * Sends a request to the backend to navigate back one level in the session.
+ * @param {string} sessionId - The current session ID.
+ * @returns {Promise<object>} - The promise resolving to the API response (should contain previous menu).
+ */
+export const goBack = async (sessionId) => {
+  console.log(`API CALL: POST /menus (Go Back) for session "${sessionId}"`);
+  const response = await fetch(`${API_BASE_URL}/menus`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    // Send the special "__BACK__" marker as the selection
+    body: JSON.stringify({ session_id: sessionId, selection: "__BACK__" }),
+  });
+
+  if (!response.ok) {
+    // Attempt to read error details from response body
+    let errorData;
+    try {
+      errorData = await response.json();
+    } catch (e) {
+      // If response body is not JSON or empty
+      errorData = { message: `HTTP error! Status: ${response.status}` };
+    }
+    console.error("API Error Response (goBack):", errorData);
+    // Throw an error with message from backend if available, otherwise status text
+    throw new Error(errorData?.detail?.error?.message || errorData?.message || response.statusText);
+  }
+
+  const data = await response.json();
+  console.log("API Success Response (goBack):", data);
+  return data; // Should return { type: "submenu", menu_items: [...] }
+};
