@@ -13,14 +13,10 @@ import openai
 class TopicInput(BaseModel):
     topic: str
 
-# Removed old SessionResponse model as /sessions now returns MenuResponse
-
 class MenuSelection(BaseModel):
     session_id: str
     selection: str
 
-# --- NEW/REVISED MenuResponse Model (incorporates SessionResponse info and depth) ---
-# Sticking with List[str] for menu_items for now to match existing code style.
 class MenuResponse(BaseModel):
     type: Literal["submenu", "content"]
     menu_items: Optional[List[str]] = None # Items for submenu, or further exploration topics for content
@@ -39,13 +35,13 @@ try:
         openai_client = None
     else:
         print("--- OpenAI client initialized successfully. ---")
-        # print("--- BACKEND CODE VERSION: DYNAMIC_DEPTH_V3 ---") # Example marker
+        # print("--- BACKEND CODE VERSION: AI_CONTENT_V1 ---") # Example marker
 except Exception as e:
     print(f"ERROR: Failed to initialize OpenAI client: {e}")
     openai_client = None
 
 # Initialize FastAPI app
-app = FastAPI(title="AI Subject Explorer Backend", version="0.2.0") # Version bump
+app = FastAPI(title="AI Subject Explorer Backend", version="0.3.0") # Version bump
 
 # --- CORS Middleware Configuration ---
 origins = ["*"] # TODO: Restrict in production
@@ -55,12 +51,12 @@ app.add_middleware(
 )
 
 # --- In-Memory Session Storage ---
-# Structure: session_id -> { topic, history, current_menu, max_menu_depth, current_depth }
+# Structure: session_id -> { topic, history, current_menu, max_menu_depth, current_depth, last_content }
 sessions: Dict[str, Dict[str, Any]] = {}
 
 # --- AI Call Functions ---
 
-# generate_main_menu_with_ai function (Seems mostly OK, returns tuple (menu_items, max_depth))
+# generate_main_menu_with_ai function (Unchanged from previous version)
 def generate_main_menu_with_ai(topic: str) -> Tuple[List[str], int]:
     """
     Generates main menu categories and determines appropriate max depth using OpenAI.
@@ -68,19 +64,17 @@ def generate_main_menu_with_ai(topic: str) -> Tuple[List[str], int]:
     """
     if not openai_client:
         print("WARNING: OpenAI client not available. Returning fallback main menu and depth.")
-        # Fallback now also includes a default depth
-        return ([f"Introduction to {topic}", f"Key Concepts in {topic}", f"History of {topic}"], 2) # Return tuple
+        return ([f"Introduction to {topic}", f"Key Concepts in {topic}", f"History of {topic}"], 2)
 
     print(f"--- Calling OpenAI (gpt-4.1-nano) for main menu & depth: '{topic}' ---")
     model_name = "gpt-4.1-nano"
 
-    # Two-part prompt structure
     content_instruction = f"""You are an assistant designing a hierarchical exploration menu for the main topic '{topic}'.
 Generate a list of 3 to 7 broad, relevant main categories for exploring this topic.
 Also, determine a logical maximum depth (integer) for menu exploration for this topic before showing detailed content.
 A depth of 1 means content is shown after the first click. A depth of 2 means content is shown after the second click, etc.
 The depth should generally be between 2 and 4 depending on topic breadth.
-For testing purposes, constrain the maximum depth you return: for the topic '{topic}', please ALWAYS return a max_menu_depth of 2.""" # Kept constraint for now
+For testing purposes, constrain the maximum depth you return: for the topic '{topic}', please ALWAYS return a max_menu_depth of 2.""" # Kept constraint
 
     json_format_instruction = """Return ONLY a valid JSON object containing two keys:
 1.  "categories": A list of strings representing the main menu categories.
@@ -93,7 +87,7 @@ Example response:
 }"""
 
     system_prompt = f"{content_instruction}\n\n{json_format_instruction}"
-    user_prompt = f"Generate menu and depth for topic: {topic}" # Simple user prompt might suffice
+    user_prompt = f"Generate menu and depth for topic: {topic}"
 
     try:
         completion = openai_client.chat.completions.create(
@@ -108,42 +102,34 @@ Example response:
         )
         content = completion.choices[0].message.content
         print(f"--- OpenAI Raw Main Menu/Depth Response: {content} ---")
-        if not content:
-            raise ValueError("OpenAI returned empty content.")
+        if not content: raise ValueError("OpenAI returned empty content.")
 
         try:
             parsed_data = json.loads(content)
             menu_items = []
-            max_depth = -1 # Initialize with invalid value
+            max_depth = -1
 
-            # Validate and parse "categories"
             if isinstance(parsed_data, dict) and "categories" in parsed_data and isinstance(parsed_data["categories"], list):
                 menu_items = [str(item).strip() for item in parsed_data["categories"] if isinstance(item, str) and item.strip()]
-                if not menu_items:
-                        raise ValueError("Parsed JSON ok, but 'categories' list was empty or contained only non-strings/whitespace.")
-            else:
-                raise ValueError("AI response JSON structure incorrect or missing 'categories' list.")
+                if not menu_items: raise ValueError("Parsed JSON ok, but 'categories' list was empty.")
+            else: raise ValueError("AI response JSON structure incorrect or missing 'categories' list.")
 
-            # Validate and parse "max_menu_depth"
             if isinstance(parsed_data, dict) and "max_menu_depth" in parsed_data and isinstance(parsed_data["max_menu_depth"], int):
                  max_depth = parsed_data["max_menu_depth"]
-                 if max_depth != 2: # Strict check for initial testing constraint
+                 if max_depth != 2:
                      print(f"WARNING: AI returned max_menu_depth={max_depth}, but was constrained to return 2. Using 2.")
                      max_depth = 2
             else:
-                 print(f"WARNING: AI response JSON structure incorrect or missing valid 'max_menu_depth' integer. Defaulting to 2.")
-                 max_depth = 2 # Use default fallback
+                 print(f"WARNING: AI response JSON structure incorrect or missing 'max_menu_depth' integer. Defaulting to 2.")
+                 max_depth = 2
 
             print(f"--- Parsed Main Menu Items: {menu_items} ---")
             print(f"--- Parsed Max Menu Depth: {max_depth} ---")
-            return (menu_items, max_depth) # Return tuple
+            return (menu_items, max_depth)
 
-        except json.JSONDecodeError:
-            raise ValueError("AI main menu/depth response was not valid JSON.")
-        except ValueError as ve:
-             raise ve
-        except Exception as parse_err:
-            raise ValueError(f"Could not process AI main menu/depth response structure: {parse_err}")
+        except json.JSONDecodeError: raise ValueError("AI main menu/depth response was not valid JSON.")
+        except ValueError as ve: raise ve
+        except Exception as parse_err: raise ValueError(f"Could not process AI main menu/depth response structure: {parse_err}")
 
     except openai.AuthenticationError as e: raise ConnectionRefusedError(f"OpenAI authentication failed. Check API key. {e}")
     except openai.RateLimitError as e: raise ConnectionAbortedError(f"OpenAI rate limit hit. {e}")
@@ -152,7 +138,7 @@ Example response:
     except Exception as e: raise RuntimeError(f"Unexpected error during AI main menu/depth generation: {e}")
 
 
-# generate_submenu_with_ai function (Unchanged - generates List[str])
+# generate_submenu_with_ai function (Unchanged)
 def generate_submenu_with_ai(topic: str, category_selection: str) -> List[str]:
     """ Generates submenu items using OpenAI API based on topic and category. """
     if not openai_client:
@@ -162,12 +148,12 @@ def generate_submenu_with_ai(topic: str, category_selection: str) -> List[str]:
     print(f"--- Calling OpenAI (gpt-4.1-nano) for submenu: Topic='{topic}', Category='{category_selection}' ---")
     model_name = "gpt-4.1-nano"
     system_prompt = f"""You are an assistant designing a hierarchical exploration menu for the main topic '{topic}'.
-Given the selected category, generate a list of 3 to 7 specific, relevant subtopics within that category.
+Given the selected category '{category_selection}', generate a list of 3 to 7 specific, relevant subtopics within that category.
 Return ONLY a valid JSON object containing a single key "subtopics" which holds a list of strings. Example response:
 {{
   "subtopics": ["Subtopic 1", "Subtopic 2", "Subtopic 3"]
 }}"""
-    user_prompt = f"Selected Category: {category_selection}"
+    user_prompt = f"Generate subtopics for Category: {category_selection}" # Adjusted user prompt slightly
 
     try:
         completion = openai_client.chat.completions.create(
@@ -200,15 +186,97 @@ Return ONLY a valid JSON object containing a single key "subtopics" which holds 
     except openai.APIError as e: raise RuntimeError(f"OpenAI returned an API error: {e}")
     except Exception as e: raise RuntimeError(f"Unexpected error during AI submenu generation: {e}")
 
+# --- NEW AI Content Generation Function ---
+def generate_content_and_further_topics_with_ai(topic: str, history: List[Tuple[str, str]], selection: str) -> Tuple[str, List[str]]:
+    """
+    Generates Markdown content and further exploration topics using OpenAI
+    based on the full navigation path.
+    Returns a tuple: (markdown_content, list_of_further_topics).
+    """
+    if not openai_client:
+        print("ERROR: OpenAI client not available for content generation.")
+        fallback_content = f"## {selection}\n\n(Fallback Content due to OpenAI client issue)\n\nDetails about {selection} within the context of {topic} would appear here."
+        fallback_topics = ["Related Topic A", "Related Topic B", "Go Deeper"]
+        return (fallback_content, fallback_topics)
+
+    # Construct the navigation path string for context
+    path_list = [item[1] for item in history if item[0] == 'menu_selection'] + [selection]
+    navigation_path = f"{topic} -> " + " -> ".join(path_list)
+
+    print(f"--- Calling OpenAI (gpt-4.1-nano) for content: Path='{navigation_path}' ---")
+    model_name = "gpt-4.1-nano"
+
+    system_prompt = f"""You are an expert assistant providing concise information based on a user's exploration path.
+The user started exploring the main topic '{topic}' and navigated through the following path: '{navigation_path}'.
+
+Your tasks are:
+1. Generate a brief (2-4 paragraphs) **Markdown summary** about the final item: '{selection}'. This summary should be relevant to its context within the navigation path provided. Use standard Markdown formatting (headings, lists, bold, italics where appropriate).
+2. Generate a list of 3-5 distinct and relevant **"further exploration" topic suggestions** related to '{selection}' and its context. These should entice the user to learn more or explore related concepts.
+
+Return ONLY a valid JSON object containing two keys:
+1.  "content_markdown": A string containing the generated Markdown summary.
+2.  "further_topics": A list of strings representing the further exploration topic suggestions.
+
+Example JSON response format:
+{{
+  "content_markdown": "## {selection}\\n\\nThis section provides an overview of {selection}...",
+  "further_topics": ["Related Concept X", "Deeper Dive into Y", "Historical Context of Z"]
+}}"""
+
+    user_prompt = f"Generate content and further topics for the final selection '{selection}' based on the path: {navigation_path}"
+
+    try:
+        completion = openai_client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=500, # Allow more tokens for content generation
+            temperature=0.7, # Slightly higher temperature for more creative content/topics
+            response_format={"type": "json_object"}
+        )
+        content_raw = completion.choices[0].message.content
+        print(f"--- OpenAI Raw Content/Further Topics Response: {content_raw} ---")
+        if not content_raw: raise ValueError("OpenAI returned empty content for content/further topics.")
+
+        try:
+            parsed_data = json.loads(content_raw)
+            generated_content = ""
+            further_topics = []
+
+            # Validate and parse "content_markdown"
+            if isinstance(parsed_data, dict) and "content_markdown" in parsed_data and isinstance(parsed_data["content_markdown"], str) and parsed_data["content_markdown"].strip():
+                generated_content = parsed_data["content_markdown"].strip()
+            else: raise ValueError("AI response JSON structure incorrect or missing valid 'content_markdown' string.")
+
+            # Validate and parse "further_topics"
+            if isinstance(parsed_data, dict) and "further_topics" in parsed_data and isinstance(parsed_data["further_topics"], list):
+                further_topics = [str(item).strip() for item in parsed_data["further_topics"] if isinstance(item, str) and item.strip()]
+                if not further_topics: raise ValueError("Parsed JSON ok, but 'further_topics' list was empty or invalid.")
+            else: raise ValueError("AI response JSON structure incorrect or missing 'further_topics' list.")
+
+            print(f"--- Parsed Content (Markdown): {generated_content[:100]}... ---") # Log snippet
+            print(f"--- Parsed Further Topics: {further_topics} ---")
+            return (generated_content, further_topics)
+
+        except json.JSONDecodeError: raise ValueError("AI content/further topics response was not valid JSON.")
+        except ValueError as ve: raise ve
+        except Exception as parse_err: raise ValueError(f"Could not process AI content/further topics response structure: {parse_err}")
+
+    except openai.AuthenticationError as e: raise ConnectionRefusedError(f"OpenAI authentication failed. Check API key. {e}")
+    except openai.RateLimitError as e: raise ConnectionAbortedError(f"OpenAI rate limit hit. {e}")
+    except openai.APIConnectionError as e: raise ConnectionError(f"Could not connect to OpenAI: {e}")
+    except openai.APIError as e: raise RuntimeError(f"OpenAI returned an API error: {e}")
+    except Exception as e: raise RuntimeError(f"Unexpected error during AI content/further topics generation: {e}")
 
 # --- API Endpoints ---
-# Endpoint order: / , /sessions, /menus
 
 @app.get("/")
 async def read_root():
     return {"message": "AI Subject Explorer Backend is alive!"}
 
-# --- UPDATED /sessions endpoint ---
+# /sessions endpoint (Unchanged from previous version)
 @app.post("/sessions", response_model=MenuResponse, status_code=201, summary="Start a new exploration session", tags=["Session Management"])
 async def create_session(topic_input: TopicInput):
     session_id = str(uuid.uuid4())
@@ -216,45 +284,37 @@ async def create_session(topic_input: TopicInput):
     print(f"--- Received POST /sessions request for topic: '{topic}' ---")
 
     if not openai_client:
-        raise HTTPException(status_code=503, detail={"error": {"code": "AI_SERVICE_UNAVAILABLE", "message": "OpenAI client is not initialized. Check backend logs and API key."}})
+        raise HTTPException(status_code=503, detail={"error": {"code": "AI_SERVICE_UNAVAILABLE", "message": "OpenAI client is not initialized."}})
 
     try:
         main_menu_items, max_menu_depth = generate_main_menu_with_ai(topic)
-        if not main_menu_items:
-            raise ValueError("AI menu generation returned empty/invalid list")
-
+        if not main_menu_items: raise ValueError("AI menu generation returned empty/invalid list")
     except (ConnectionRefusedError, ConnectionAbortedError, ConnectionError, RuntimeError, ValueError) as e:
-        status_code = 503; error_code = "AI_GENERATION_FAILED"
+        status_code = 503; error_code = "AI_GENERATION_FAILED"; msg=str(e)
         if isinstance(e, ConnectionRefusedError): status_code, error_code = 401, "AI_AUTH_ERROR"
         elif isinstance(e, ConnectionAbortedError): status_code, error_code = 429, "AI_RATE_LIMIT"
         elif isinstance(e, ConnectionError): status_code, error_code = 504, "AI_CONNECTION_ERROR"
         elif isinstance(e, ValueError): status_code, error_code = 502, "AI_BAD_RESPONSE"
-        # Allow RuntimeError to be caught by generic handler below if needed
-        print(f"ERROR in /sessions calling AI: {e}")
-        raise HTTPException(status_code=status_code, detail={"error": {"code": error_code, "message": str(e)}})
+        print(f"ERROR in /sessions calling AI: {msg}")
+        raise HTTPException(status_code=status_code, detail={"error": {"code": error_code, "message": msg}})
     except Exception as e:
         print(f"ERROR in /sessions unexpected: {e}")
-        raise HTTPException(status_code=500, detail={"error": {"code": "SESSION_CREATION_FAILED", "message": "An unexpected error occurred creating the session."}})
+        raise HTTPException(status_code=500, detail={"error": {"code": "SESSION_CREATION_FAILED", "message": "An unexpected error occurred."}})
 
-    # Define initial session state including depth
     initial_depth = 0
     sessions[session_id] = {
         "topic": topic,
-        "history": [("topic", topic)], # History starts with the main topic entry
+        "history": [("topic", topic)],
         "current_menu": main_menu_items,
         "max_menu_depth": max_menu_depth,
-        "current_depth": initial_depth # Store initial depth
+        "current_depth": initial_depth,
+        "last_content": None # Initialize last_content
     }
     print(f"--- Session '{session_id}' created. Max depth={max_menu_depth}. Current Depth={initial_depth}. State stored. ---")
 
-    # Return the new MenuResponse structure
     return MenuResponse(
-        type="submenu",
-        menu_items=main_menu_items,
-        content=None, # No content for initial menu
-        session_id=session_id,
-        current_depth=initial_depth,
-        max_menu_depth=max_menu_depth
+        type="submenu", menu_items=main_menu_items, content=None,
+        session_id=session_id, current_depth=initial_depth, max_menu_depth=max_menu_depth
     )
 
 # --- UPDATED /menus endpoint ---
@@ -264,133 +324,103 @@ async def select_menu_item(menu_selection: MenuSelection):
     selection = menu_selection.selection
     print(f"--- Received POST /menus request for session '{session_id}', selection: '{selection}' ---")
 
-    # 1. Retrieve session state
     if session_id not in sessions:
         print(f"ERROR in /menus: Session ID '{session_id}' not found.")
-        raise HTTPException(status_code=404, detail={"error": {"code": "SESSION_NOT_FOUND", "message": "Session ID not found. It might have expired or is invalid."}})
+        raise HTTPException(status_code=404, detail={"error": {"code": "SESSION_NOT_FOUND", "message": "Session ID not found."}})
     session_data = sessions[session_id]
 
-    # 2. Validate selection (using current_menu from session)
     current_menu = session_data.get("current_menu", [])
     if selection not in current_menu:
         print(f"ERROR in /menus: Selection '{selection}' not found in current menu: {current_menu}")
-        raise HTTPException(status_code=400, detail={"error": {"code": "INVALID_SELECTION", "message": f"Selection '{selection}' is not a valid option in the current menu."}})
+        raise HTTPException(status_code=400, detail={"error": {"code": "INVALID_SELECTION", "message": f"Selection '{selection}' is not valid."}})
 
-    # 3. Retrieve depth info and calculate next depth
     max_menu_depth = session_data.get("max_menu_depth")
-    # Use stored current_depth + 1 for the *next* depth level this selection leads to
-    current_depth = session_data.get("current_depth", -1) # Get the depth *before* this selection
+    current_depth = session_data.get("current_depth", -1)
     next_depth = current_depth + 1
 
-    if max_menu_depth is None or not isinstance(max_menu_depth, int) or current_depth == -1:
-         print(f"ERROR in /menus: Depth information missing or invalid in session data for session '{session_id}'. MaxDepth: {max_menu_depth}, CurrentDepth: {current_depth}")
-         raise HTTPException(status_code=500, detail={"error": {"code": "INTERNAL_SERVER_ERROR", "message": "Session state is missing menu depth information."}})
+    if max_menu_depth is None or current_depth == -1:
+         print(f"ERROR in /menus: Depth info missing/invalid. MaxDepth: {max_menu_depth}, CurrentDepth: {current_depth}")
+         raise HTTPException(status_code=500, detail={"error": {"code": "INTERNAL_SERVER_ERROR", "message": "Session state missing depth info."}})
 
-    print(f"--- Request is for transition from depth {current_depth} to {next_depth}. Max Depth: {max_menu_depth} ---")
+    print(f"--- Request transition from depth {current_depth} to {next_depth}. Max Depth: {max_menu_depth} ---")
 
-    response = None # Initialize response variable
+    response = None
 
-    # 4. Determine action based on the *next* depth level vs max_depth
-    if next_depth < max_menu_depth:
-        # Generate Submenu: We haven't reached the max depth yet
-        print(f"--- Generating AI submenu (Target Depth {next_depth}) for selection: '{selection}' ---")
-        if not openai_client:
-            print("ERROR in /menus: OpenAI client not available.")
-            raise HTTPException(status_code=503, detail={"error": {"code": "AI_SERVICE_UNAVAILABLE", "message": "OpenAI client is not available to generate submenu."}})
-        try:
+    try: # Wrap primary logic in try block to catch AI errors uniformly
+        if next_depth < max_menu_depth:
+            # Generate Submenu
+            print(f"--- Generating AI submenu (Target Depth {next_depth}) for selection: '{selection}' ---")
             topic = session_data.get("topic", "Unknown Topic")
-            submenu_items = generate_submenu_with_ai(topic, selection)
-            if not submenu_items:
-                raise ValueError("AI submenu generation returned empty or invalid list")
+            submenu_items = generate_submenu_with_ai(topic, selection) # Can raise exceptions
 
-            # Update session state AFTER successful generation
             session_data["history"].append(("menu_selection", selection))
             session_data["current_menu"] = submenu_items
-            session_data["current_depth"] = next_depth # Update depth in session
-            sessions[session_id] = session_data
+            session_data["current_depth"] = next_depth
+            sessions[session_id] = session_data # Update session
             print(f"--- Session '{session_id}' updated. Submenu generated (Reached Depth {next_depth}). ---")
 
-            # Construct the response
             response = MenuResponse(
-                type="submenu",
-                menu_items=submenu_items,
-                content=None,
+                type="submenu", menu_items=submenu_items, content=None,
+                session_id=session_id, current_depth=next_depth, max_menu_depth=max_menu_depth
+            )
+
+        elif next_depth == max_menu_depth:
+            # Generate Content using new AI function
+            print(f"--- Max depth reached. Generating AI content (Target Depth {next_depth}) for selection: '{selection}' ---")
+            topic = session_data.get("topic", "Unknown Topic")
+            history = session_data.get("history", [])
+            # Call the NEW function
+            generated_content, further_topics = generate_content_and_further_topics_with_ai(topic, history, selection) # Can raise exceptions
+
+            session_data["history"].append(("menu_selection", selection))
+            session_data["current_menu"] = further_topics # Next menu shows further topics
+            session_data["current_depth"] = next_depth
+            session_data["last_content"] = generated_content # Store the generated content
+            sessions[session_id] = session_data # Update session
+            print(f"--- Session '{session_id}' updated. AI content generated (Reached Depth {next_depth}). ---")
+
+            response = MenuResponse(
+                type="content", menu_items=further_topics, content=generated_content,
+                session_id=session_id, current_depth=next_depth, max_menu_depth=max_menu_depth
+            )
+
+        else: # next_depth > max_menu_depth
+            # Handle clicks after content shown (current placeholder: return last state)
+            print(f"--- Navigation beyond max depth ({max_menu_depth}). Selection: {selection}. Returning last state. ---")
+            response = MenuResponse(
+                type="content",
+                menu_items=session_data.get("current_menu", []), # Should be further topics
+                content=session_data.get("last_content", "Content was already displayed."), # Use stored content
                 session_id=session_id,
-                current_depth=next_depth,
+                current_depth=current_depth, # Stay at max depth
                 max_menu_depth=max_menu_depth
             )
 
-        except (ConnectionRefusedError, ConnectionAbortedError, ConnectionError, RuntimeError, ValueError) as e:
-            status_code = 503; error_code = "AI_GENERATION_FAILED"
-            if isinstance(e, ConnectionRefusedError): status_code, error_code = 401, "AI_AUTH_ERROR"
-            elif isinstance(e, ConnectionAbortedError): status_code, error_code = 429, "AI_RATE_LIMIT"
-            elif isinstance(e, ConnectionError): status_code, error_code = 504, "AI_CONNECTION_ERROR"
-            elif isinstance(e, ValueError): status_code, error_code = 502, "AI_BAD_RESPONSE"
-            # Allow RuntimeError to be caught by generic handler below if needed
-            print(f"ERROR in /menus calling AI for submenu: {e}"); raise HTTPException(status_code=status_code, detail={"error": {"code": error_code, "message": str(e)}})
-        except Exception as e:
-            print(f"ERROR in /menus unexpected during AI call: {e}"); raise HTTPException(status_code=500, detail={"error": {"code": "SUBMENU_FAILED", "message": "An unexpected error occurred generating the submenu."}})
+    # Centralized Error Handling for AI calls within /menus
+    except (ConnectionRefusedError, ConnectionAbortedError, ConnectionError, RuntimeError, ValueError) as e:
+        status_code = 503; error_code = "AI_GENERATION_FAILED"; msg = str(e)
+        if isinstance(e, ConnectionRefusedError): status_code, error_code = 401, "AI_AUTH_ERROR"
+        elif isinstance(e, ConnectionAbortedError): status_code, error_code = 429, "AI_RATE_LIMIT"
+        elif isinstance(e, ConnectionError): status_code, error_code = 504, "AI_CONNECTION_ERROR"
+        elif isinstance(e, ValueError): status_code, error_code = 502, "AI_BAD_RESPONSE"
+        print(f"ERROR in /menus calling AI: {msg}");
+        raise HTTPException(status_code=status_code, detail={"error": {"code": error_code, "message": msg}})
+    except Exception as e:
+        print(f"ERROR in /menus unexpected during generation: {e}");
+        raise HTTPException(status_code=500, detail={"error": {"code": "RESPONSE_GENERATION_FAILED", "message": "An unexpected server error occurred."}})
 
-    elif next_depth == max_menu_depth:
-        # Generate Content (Placeholder): We've reached the max depth
-        print(f"--- Max depth reached. Generating placeholder content (Target Depth {next_depth}) for selection: '{selection}' ---")
-
-        # --- TODO: Replace placeholder logic with actual AI call for content ---
-        placeholder_content = f"## {selection}\n\nThis is placeholder content for **{selection}** (within the topic '{session_data.get('topic')}').\n\nActual AI-generated content providing an overview would appear here based on the selection path: {' -> '.join([item[1] for item in session_data['history']])} -> {selection}"
-        placeholder_further_topics = ["Further Topic 1", "Further Topic 2", "Further Topic 3"] # TODO: Generate via AI?
-
-        # Update session state AFTER successful generation
-        session_data["history"].append(("menu_selection", selection))
-        session_data["current_menu"] = placeholder_further_topics # Next menu is the "further topics"
-        session_data["current_depth"] = next_depth # Update depth in session
-        # session_data["last_content"] = placeholder_content # Optional: store last generated content
-        sessions[session_id] = session_data
-        print(f"--- Session '{session_id}' updated. Placeholder content generated (Reached Depth {next_depth}). ---")
-
-        # Construct the response
-        response = MenuResponse(
-            type="content",
-            menu_items=placeholder_further_topics, # Menu items are now the further exploration topics
-            content=placeholder_content,
-            session_id=session_id,
-            current_depth=next_depth,
-            max_menu_depth=max_menu_depth
-        )
-
-    else: # next_depth > max_menu_depth
-        # This case handles selecting from the "further exploration topics" menu after content is shown
-        # TODO: Implement behavior for selecting a "further exploration" topic.
-        #       Should it start a new exploration? Go back? Show different content?
-        #       For now, maybe just return the same content again or an error.
-        print(f"--- Navigation beyond max depth ({max_menu_depth}) attempted from depth {current_depth}. Selection: {selection} ---")
-        # Option 1: Return error
-        # raise HTTPException(status_code=501, detail={"error": {"code": "MAX_DEPTH_NAVIGATION_NOT_IMPLEMENTED", "message": f"Selecting items after reaching maximum depth ({max_menu_depth}) is not yet implemented."}})
-        # Option 2: Return previous content again (simple placeholder behavior)
-        print(f"--- Returning previous content/further topics as >max_depth navigation not implemented ---")
-        response = MenuResponse(
-            type="content",
-            menu_items=session_data.get("current_menu", []), # Return the existing further topics
-            content=session_data.get("last_content", "Content was already displayed."), # Maybe retrieve stored content?
-            session_id=session_id,
-            current_depth=current_depth, # Return the previous depth state
-            max_menu_depth=max_menu_depth
-        )
-        # For Option 2, we might need to store the 'last_content' in the session state when it's first generated.
-
-
-    # 5. Return the prepared response (if successful)
+    # Return the prepared response if successful
     if response:
          return response
     else:
-         # This case should ideally not be reached if logic above is sound
-         print(f"ERROR in /menus: Failed to generate a response for session '{session_id}', selection '{selection}'.")
-         raise HTTPException(status_code=500, detail={"error": {"code": "RESPONSE_GENERATION_FAILED", "message": "Server failed to generate a valid response for the menu selection."}})
+         # Should not happen if logic is correct, but safeguard
+         print(f"ERROR in /menus: Failed to generate response logic path for session '{session_id}', selection '{selection}'.")
+         raise HTTPException(status_code=500, detail={"error": {"code": "RESPONSE_LOGIC_ERROR", "message": "Server logic failed to produce a response."}})
 
 
-# --- Uvicorn runner (for local development reference) ---
+# --- Uvicorn runner ---
 if __name__ == "__main__":
     import uvicorn
     print("--- Starting Uvicorn server (likely for local testing) ---")
     port = int(os.environ.get("PORT", 8000))
-    # Use the string "main:app" to refer to the app instance
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
