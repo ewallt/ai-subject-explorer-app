@@ -44,10 +44,17 @@ except Exception as e:
 app = FastAPI(title="AI Subject Explorer Backend", version="0.4.0") # Version bump
 
 # --- CORS Middleware Configuration ---
-origins = ["*"] # TODO: Restrict in production
+origins = [
+    "https://ai-subject-explorer-app-frontend.onrender.com",
+    # Add local dev URLs if needed
+]
+
 app.add_middleware(
-    CORSMiddleware, allow_origins=origins, allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=origins,      # Use the specific list
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --- In-Memory Session Storage ---
