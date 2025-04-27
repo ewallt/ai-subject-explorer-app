@@ -56,7 +56,7 @@ sessions: Dict[str, Dict[str, Any]] = {}
 
 # --- AI Call Functions ---
 
-# generate_main_menu_with_ai function (Unchanged from previous version)
+# UPDATED generate_main_menu_with_ai function
 def generate_main_menu_with_ai(topic: str) -> Tuple[List[str], int]:
     """
     Generates main menu categories and determines appropriate max depth using OpenAI.
@@ -64,30 +64,30 @@ def generate_main_menu_with_ai(topic: str) -> Tuple[List[str], int]:
     """
     if not openai_client:
         print("WARNING: OpenAI client not available. Returning fallback main menu and depth.")
-        return ([f"Introduction to {topic}", f"Key Concepts in {topic}", f"History of {topic}"], 2)
+        # Fallback now also includes a default depth
+        return ([f"Introduction to {topic}", f"Key Concepts in {topic}", f"History of {topic}"], 2) # Return tuple
 
     print(f"--- Calling OpenAI (gpt-4.1-nano) for main menu & depth: '{topic}' ---")
     model_name = "gpt-4.1-nano"
 
+    # Two-part prompt structure
     content_instruction = f"""You are an assistant designing a hierarchical exploration menu for the main topic '{topic}'.
 Generate a list of 3 to 7 broad, relevant main categories for exploring this topic.
 Also, determine a logical maximum depth (integer) for menu exploration for this topic before showing detailed content.
-A depth of 1 means content is shown after the first click. A depth of 2 means content is shown after the second click, etc.
-The depth should generally be between 2 and 4 depending on topic breadth.
-For testing purposes, constrain the maximum depth you return: for the topic '{topic}', please ALWAYS return a max_menu_depth of 2.""" # Kept constraint
+Choose a depth between 2 and 4 (inclusive) that seems appropriate for the complexity of the topic '{topic}'.""" # Removed the "ALWAYS return 2" constraint
 
     json_format_instruction = """Return ONLY a valid JSON object containing two keys:
 1.  "categories": A list of strings representing the main menu categories.
-2.  "max_menu_depth": An integer representing the determined maximum depth (which must be 2 for now).
+2.  "max_menu_depth": An integer representing the determined maximum depth (must be between 2 and 4).
 
 Example response:
 {
   "categories": ["Overview", "History", "Key Aspects", "Future Trends"],
-  "max_menu_depth": 2
-}"""
+  "max_menu_depth": 3
+}""" # Updated example depth
 
     system_prompt = f"{content_instruction}\n\n{json_format_instruction}"
-    user_prompt = f"Generate menu and depth for topic: {topic}"
+    user_prompt = f"Generate menu and depth for topic: {topic}" # Simple user prompt might suffice
 
     try:
         completion = openai_client.chat.completions.create(
@@ -96,47 +96,56 @@ Example response:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            max_tokens=250,
+            max_tokens=250, # Increased slightly to accommodate depth
             temperature=0.5,
             response_format={"type": "json_object"}
         )
         content = completion.choices[0].message.content
         print(f"--- OpenAI Raw Main Menu/Depth Response: {content} ---")
-        if not content: raise ValueError("OpenAI returned empty content.")
+        if not content:
+            raise ValueError("OpenAI returned empty content.")
 
         try:
             parsed_data = json.loads(content)
             menu_items = []
-            max_depth = -1
+            max_depth = -1 # Initialize with invalid value
 
+            # Validate and parse "categories"
             if isinstance(parsed_data, dict) and "categories" in parsed_data and isinstance(parsed_data["categories"], list):
                 menu_items = [str(item).strip() for item in parsed_data["categories"] if isinstance(item, str) and item.strip()]
-                if not menu_items: raise ValueError("Parsed JSON ok, but 'categories' list was empty.")
-            else: raise ValueError("AI response JSON structure incorrect or missing 'categories' list.")
-
-            if isinstance(parsed_data, dict) and "max_menu_depth" in parsed_data and isinstance(parsed_data["max_menu_depth"], int):
-                 max_depth = parsed_data["max_menu_depth"]
-                 if max_depth != 2:
-                     print(f"WARNING: AI returned max_menu_depth={max_depth}, but was constrained to return 2. Using 2.")
-                     max_depth = 2
+                if not menu_items:
+                        raise ValueError("Parsed JSON ok, but 'categories' list was empty or contained only non-strings/whitespace.")
             else:
-                 print(f"WARNING: AI response JSON structure incorrect or missing 'max_menu_depth' integer. Defaulting to 2.")
-                 max_depth = 2
+                raise ValueError("AI response JSON structure incorrect or missing 'categories' list.")
+
+            # Validate and parse "max_menu_depth"
+            if isinstance(parsed_data, dict) and "max_menu_depth" in parsed_data and isinstance(parsed_data["max_menu_depth"], int):
+                max_depth = parsed_data["max_menu_depth"]
+                # Optional: Add check for reasonable range (e.g., 1 to 5) if desired
+                if max_depth < 1: # Ensure it's at least 1 (or 2 based on prompt)
+                    print(f"WARNING: AI returned invalid max_menu_depth={max_depth}. Defaulting to 2.")
+                    max_depth = 2
+            # Removed the strict check/warning that forced depth to 2
+            else:
+                print(f"WARNING: AI response JSON structure incorrect or missing valid 'max_menu_depth' integer. Defaulting to 2.")
+                max_depth = 2 # Use default fallback
 
             print(f"--- Parsed Main Menu Items: {menu_items} ---")
             print(f"--- Parsed Max Menu Depth: {max_depth} ---")
-            return (menu_items, max_depth)
+            return (menu_items, max_depth) # Return tuple
 
-        except json.JSONDecodeError: raise ValueError("AI main menu/depth response was not valid JSON.")
-        except ValueError as ve: raise ve
-        except Exception as parse_err: raise ValueError(f"Could not process AI main menu/depth response structure: {parse_err}")
+        except json.JSONDecodeError:
+            raise ValueError("AI main menu/depth response was not valid JSON.")
+        except ValueError as ve:
+             raise ve
+        except Exception as parse_err:
+            raise ValueError(f"Could not process AI main menu/depth response structure: {parse_err}")
 
     except openai.AuthenticationError as e: raise ConnectionRefusedError(f"OpenAI authentication failed. Check API key. {e}")
     except openai.RateLimitError as e: raise ConnectionAbortedError(f"OpenAI rate limit hit. {e}")
     except openai.APIConnectionError as e: raise ConnectionError(f"Could not connect to OpenAI: {e}")
     except openai.APIError as e: raise RuntimeError(f"OpenAI returned an API error: {e}")
     except Exception as e: raise RuntimeError(f"Unexpected error during AI main menu/depth generation: {e}")
-
 
 # generate_submenu_with_ai function (Unchanged)
 def generate_submenu_with_ai(topic: str, category_selection: str) -> List[str]:
