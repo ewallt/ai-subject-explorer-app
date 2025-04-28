@@ -1,81 +1,64 @@
-// *** frontend/services/api.js ***
-// Real API Service - Makes fetch calls to the backend
+// *** frontend/src/services/api.js ***
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
-console.log(`API Base URL configured: ${API_BASE_URL}`);
+console.log(`API Base URL: ${API_BASE_URL}`);
 
-// ---------------------------------------------------------------------------
+// ───────────────────────────────
 //  startSession
-// ---------------------------------------------------------------------------
+// ───────────────────────────────
 export const startSession = async (topic) => {
-  console.log(`API CALL: POST /sessions ("${topic}")`);
-  try {
-    const response = await fetch(`${API_BASE_URL}/sessions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topic }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      const msg =
-        data.error?.message || `HTTP error! Status: ${response.status}`;
-      throw new Error(msg);
-    }
-    return data;
-  } catch (err) {
-    throw new Error(err.message || "Network error starting session.");
-  }
+  const resp = await fetch(`${API_BASE_URL}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error?.message || resp.statusText);
+  return data;
 };
 
-// ---------------------------------------------------------------------------
+// ───────────────────────────────
 //  selectMenuItem
-// ---------------------------------------------------------------------------
+// ───────────────────────────────
 export const selectMenuItem = async (sessionId, selection) => {
-  console.log(`API CALL: POST /menus ("${selection}")`);
-  try {
-    const response = await fetch(`${API_BASE_URL}/menus`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, selection }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      const msg =
-        data.error?.message || `HTTP error! Status: ${response.status}`;
-      throw new Error(msg);
-    }
-    return data;
-  } catch (err) {
-    throw new Error(err.message || "Network error selecting menu item.");
-  }
+  const resp = await fetch(`${API_BASE_URL}/menus`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, selection }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error?.message || resp.statusText);
+  return data;
 };
 
-// ---------------------------------------------------------------------------
-//  goBack  (NEW implementation)
-// ---------------------------------------------------------------------------
+// ───────────────────────────────
+//  goBack
+// ───────────────────────────────
 export const goBack = async (sessionId) => {
-  console.log(`API CALL: POST /go_back (session "${sessionId}")`);
-  try {
-    const response = await fetch(`${API_BASE_URL}/go_back`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId }),
-    });
+  const resp = await fetch(`${API_BASE_URL}/go_back`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error?.message || resp.statusText);
+  return data;
+};
 
-    const data = await response.json();
-    if (!response.ok) {
-      const msg =
-        data.error?.message || `HTTP error! Status: ${response.status}`;
-      throw new Error(msg);
-    }
-    return data; // { type: "submenu", menu_items: [...] }
-  } catch (err) {
-    throw new Error(err.message || "Network error navigating back.");
-  }
+// ───────────────────────────────
+//  NEW: returnToMainMenu
+// ───────────────────────────────
+export const returnToMainMenu = async (sessionId) => {
+  const resp = await fetch(`${API_BASE_URL}/main_menu`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error?.message || resp.statusText);
+  return data; // { type:"submenu", menu_items:[...] }
 };
 
 // *** End of api.js ***
