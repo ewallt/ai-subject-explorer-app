@@ -1,4 +1,4 @@
-// *** App.jsx (with debug display style update) ***
+// *** App.jsx (Complete code with explicit Go Back debug display) ***
 import React, { useState, useEffect } from 'react';
 
 // Import the API functions (add goBack)
@@ -30,6 +30,7 @@ function App() {
   // --- NEW: State for Debugging Depths ---
   const [debugCurrentDepth, setDebugCurrentDepth] = useState(null);
   const [debugMaxDepth, setDebugMaxDepth] = useState(null);
+  const [debugLastGoBackMenu, setDebugLastGoBackMenu] = useState(null); // <-- ADDED STATE
 
   // --- API Call Handlers ---
   const handleTopicSubmit = async (topic) => {
@@ -50,6 +51,7 @@ function App() {
     // *** NEW: Reset debug state ***
     setDebugCurrentDepth(null);
     setDebugMaxDepth(null);
+    setDebugLastGoBackMenu(null); // <-- RESET DEBUG STATE
 
     try {
       // Start session
@@ -84,6 +86,7 @@ function App() {
       // *** NEW: Update Debug State from /menus response ***
       setDebugCurrentDepth(data.current_depth);
       setDebugMaxDepth(data.max_menu_depth);
+      setDebugLastGoBackMenu(null); // <-- RESET DEBUG STATE ON FORWARD NAV
       console.log("Received response: Type=", data.type, "Depth:", data.current_depth, "/", data.max_menu_depth);
 
 
@@ -142,6 +145,7 @@ function App() {
       // The backend should always return type="submenu" when going back
       if (data.type === "submenu") {
         setMenuItems(data.menu_items || []);
+        setDebugLastGoBackMenu(data.menu_items || []); // <-- STORE RETURNED MENU FOR DEBUG
         // Remove the last item from frontend history to match backend state
         setHistory(prev => prev.slice(0, -1));
         console.log("Navigated back successfully.");
@@ -149,6 +153,7 @@ function App() {
         console.error("Received unexpected response type after going back:", data.type);
         setError("An unexpected error occurred while navigating back.");
         setMenuItems([]); // Clear menu on unexpected error
+        setDebugLastGoBackMenu(null); // <-- CLEAR DEBUG ON ERROR
       }
 
     } catch (err) {
@@ -158,6 +163,7 @@ function App() {
       console.error("Error in handleGoBack calling goBack API:", err);
       if (err.message && (err.message.includes("Session ID not found") || err.message.includes("404"))) {
         handleReset();
+        // No need to clear debugLastGoBackMenu here, handleReset does it
         setError("Session expired or invalid. Please start again.");
       }
     } finally {
@@ -179,6 +185,7 @@ function App() {
     // *** NEW: Reset debug state ***
     setDebugCurrentDepth(null);
     setDebugMaxDepth(null);
+    setDebugLastGoBackMenu(null); // <-- RESET DEBUG STATE
   }
 
   // --- Render Logic ---
@@ -275,22 +282,27 @@ function App() {
         {/* Display Current Menu, truncated visually, with full list on hover */}
         {sessionId && menuItems.length > 0 && (
           <span
-            title={`[${menuItems.join(', ')}]`} // *** ADDED TITLE ATTRIBUTE FOR HOVER ***
+            title={`[${menuItems.join(', ')}]`} // Hover tooltip (may or may not work reliably)
             style={{
               marginLeft: '10px',
               display: 'block', // Put it on a new line within the box
               marginTop: '3px',
-              // *** MODIFIED STYLES START ***
-              maxWidth: '300px', // Limit width visually
-              overflow: 'hidden', // Hide overflow visually
-              /* Remove text-overflow and nowrap which might interfere with title */
-              // textOverflow: 'ellipsis', // Removed
-              // whiteSpace: 'nowrap' // Removed
-              // *** MODIFIED STYLES END ***
+              // Original truncation styles
+              maxWidth: '300px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
             }}>
             Current Menu: [{menuItems.join(', ')}]
           </span>
         )}
+        {/* --- ADDED BLOCK --- */}
+        {debugLastGoBackMenu && (
+          <div style={{ marginTop: '3px', color: 'green', wordBreak: 'break-all', fontSize: '11px' }}> {/* Added styling */}
+            Last GoBack Menu: [{debugLastGoBackMenu.join(', ')}]
+          </div>
+        )}
+        {/* --- END OF ADDED BLOCK --- */}
 
       </div>
       {/* --- END Debug Display --- */}
