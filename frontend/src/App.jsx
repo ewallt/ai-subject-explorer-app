@@ -1,216 +1,137 @@
-// *** App.jsx (Complete code with enhanced Go Back debug display) ***
-import React, { useState, useEffect } from 'react';
+// *** App.jsx ***
 
-// Import the API functions (add goBack)
-import { startSession, selectMenuItem, goBack } from './services/api.js';
+import React, { useState } from 'react';
+import {
+  startSession,
+  selectMenuItem,
+  goBack,
+  returnToMainMenu    // NEW
+} from './services/api.js';
 
-// Import the UI components
 import TopicInput from './components/TopicInput.jsx';
 import MenuList from './components/MenuList.jsx';
-
-// Import a Markdown renderer (optional)
-// import ReactMarkdown from 'react-markdown'; // Uncomment if installed
-
-// Import CSS
 import './index.css';
 
-// Get API Base URL - Make sure api.js uses this or equivalent if needed
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 function App() {
-  // State variables
   const [sessionId, setSessionId] = useState(null);
-  const [menuItems, setMenuItems] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [menuItems, setMenuItems]  = useState([]);
+  const [isLoading, setIsLoading]  = useState(false);
+  const [error,      setError]     = useState(null);
   const [currentTopic, setCurrentTopic] = useState('');
-  const [history, setHistory] = useState([]);
+  const [history,    setHistory]   = useState([]);
   const [currentContent, setCurrentContent] = useState(null);
-
-  // --- NEW: State for Debugging Depths ---
   const [debugCurrentDepth, setDebugCurrentDepth] = useState(null);
-  const [debugMaxDepth, setDebugMaxDepth] = useState(null);
-  const [debugLastGoBackMenu, setDebugLastGoBackMenu] = useState(null); // <-- ADDED STATE
+  const [debugMaxDepth,     setDebugMaxDepth]     = useState(null);
 
-  // --- API Call Handlers ---
+  // ── Start session ─────────────────────────────────────────────────────────
   const handleTopicSubmit = async (topic) => {
-    console.log("Submitting topic:", topic);
-    // Wake-up call (optional, keep if needed)
-    // console.log("Sending wake-up GET request to backend...");
-    // try { /* ... wake-up fetch ... */ } catch (wakeError) { /* ... */ }
-    // console.log("Wake-up request attempt finished.");
-
-    // Reset state
-    setIsLoading(true);
-    setError(null);
-    setSessionId(null);
-    setMenuItems([]);
-    setHistory([]);
-    setCurrentTopic(topic);
-    setCurrentContent(null);
-    // *** NEW: Reset debug state ***
-    setDebugCurrentDepth(null);
-    setDebugMaxDepth(null);
-    setDebugLastGoBackMenu(null); // <-- RESET DEBUG STATE
-
     try {
-      // Start session
-      const data = await startSession(topic); // Expects MenuResponse structure
+      setIsLoading(true); setError(null);
+      const data = await startSession(topic);
       setSessionId(data.session_id);
-      setMenuItems(data.menu_items || []);
-      setHistory([`Topic: ${topic}`]); // Initial history
-
-      // *** NEW: Update Debug State from /sessions response ***
+      setMenuItems(data.menu_items);
+      setCurrentTopic(topic);
+      setHistory([`Topic: ${topic}`]);
+      setCurrentContent(null);
       setDebugCurrentDepth(data.current_depth);
       setDebugMaxDepth(data.max_menu_depth);
-
-      console.log("Real session started:", data.session_id, "Depth:", data.current_depth, "/", data.max_menu_depth);
     } catch (err) {
-        const errorMsg = err.message || 'Failed to start session.';
-        setError(errorMsg);
-        console.error("Error in handleTopicSubmit calling startSession:", err);
-    }
-    finally { setIsLoading(false); }
+      setError(err.message);
+    } finally { setIsLoading(false); }
   };
 
+  // ── Select menu item ──────────────────────────────────────────────────────
   const handleMenuSelection = async (selection) => {
-    console.log("Selecting menu item:", selection);
-    if (!sessionId) { console.error("No session ID available for menu selection"); return; }
-    setIsLoading(true);
-    setError(null);
-
+    if (!sessionId) return;
     try {
-      // Select item API call
-      const data = await selectMenuItem(sessionId, selection); // Expects MenuResponse
-
-      // *** NEW: Update Debug State from /menus response ***
+      setIsLoading(true); setError(null);
+      const data = await selectMenuItem(sessionId, selection);
       setDebugCurrentDepth(data.current_depth);
       setDebugMaxDepth(data.max_menu_depth);
-      setDebugLastGoBackMenu(null); // <-- RESET DEBUG STATE ON FORWARD NAV
-      console.log("Received response: Type=", data.type, "Depth:", data.current_depth, "/", data.max_menu_depth);
 
-
-      // Update state based on response type
       if (data.type === "content") {
-        console.log("Received content response type.");
-        // Content field name from backend is 'content', not 'content_markdown' in latest model
-        setCurrentContent(data.content || "No content provided.");
-        // menu_items now contains further exploration topics
-        setMenuItems(data.menu_items || []);
-      } else { // type === "submenu"
-        console.log("Received submenu response type.");
-        setMenuItems(data.menu_items || []);
-        setCurrentContent(null); // Clear content if showing submenu
-      }
-
-      // Update history only if not going back (Go Back handles its own history)
-        setHistory(prev => [...prev, `Selected: ${selection}`]);
-        console.log("Menu/Content updated via API");
-
-    } catch (err) {
-        const errorMsg = err.message || 'Failed to process selection.';
-        setError(errorMsg);
-        console.error("Error in handleMenuSelection calling selectMenuItem:", err);
-        // Consider session reset on specific errors
-         if (err.message && (err.message.includes("Session ID not found") || err.message.includes("404"))) {
-           handleReset();
-           setError("Session expired or invalid. Please start again.");
-         }
-    }
-    finally { setIsLoading(false); }
-  };
-
-
-  const handleGoBack = async () => {
-    console.log("Going back one level...");
-    if (!sessionId || history.length <= 1) {
-      console.log("Cannot go back further.");
-      return;
-    }
-    setIsLoading(true);
-    setError(null);
-    setCurrentContent(null); // Clear content when going back
-
-    try {
-      // Call the goBack API function - Assume it returns MenuResponse
-      const data = await goBack(sessionId);
-
-      // *** NEW: Update Debug State from /go_back response ***
-      // Ensure your /go_back endpoint actually returns these fields
-      setDebugCurrentDepth(data.current_depth);
-      setDebugMaxDepth(data.max_menu_depth);
-      console.log("Received response from goBack: Type=", data.type, "Depth:", data.current_depth, "/", data.max_menu_depth);
-
-
-      // The backend should always return type="submenu" when going back
-      if (data.type === "submenu") {
-        setMenuItems(data.menu_items || []);
-        setDebugLastGoBackMenu(data.menu_items || []); // <-- STORE RETURNED MENU FOR DEBUG
-        // Remove the last item from frontend history to match backend state
-        setHistory(prev => prev.slice(0, -1));
-        console.log("Navigated back successfully.");
+        setCurrentContent(data.content);
+        setMenuItems(data.menu_items);
       } else {
-        console.error("Received unexpected response type after going back:", data.type);
-        setError("An unexpected error occurred while navigating back.");
-        setMenuItems([]); // Clear menu on unexpected error
-        setDebugLastGoBackMenu(null); // <-- CLEAR DEBUG ON ERROR
+        setCurrentContent(null);
+        setMenuItems(data.menu_items);
       }
-
+      setHistory(prev => [...prev, `Selected: ${selection}`]);
     } catch (err) {
-      const errorMsg = err.message || 'Failed to navigate back.';
-      setError(errorMsg);
-      setMenuItems([]); // Clear menu on error
-      console.error("Error in handleGoBack calling goBack API:", err);
-      if (err.message && (err.message.includes("Session ID not found") || err.message.includes("404"))) {
-        handleReset();
-        // No need to clear debugLastGoBackMenu here, handleReset does it
-        setError("Session expired or invalid. Please start again.");
-      }
-    } finally {
-      setIsLoading(false);
-    }
+      setError(err.message);
+    } finally { setIsLoading(false); }
   };
 
+  // ── Go Back ───────────────────────────────────────────────────────────────
+  const handleGoBack = async () => {
+    if (!sessionId) return;
+    try {
+      setIsLoading(true); setError(null); setCurrentContent(null);
+      const data = await goBack(sessionId);
+      setMenuItems(data.menu_items);
+      setDebugCurrentDepth(data.current_depth);
+      setHistory(prev => prev.slice(0, -1));
+    } catch (err) {
+      setError(err.message);
+    } finally { setIsLoading(false); }
+  };
 
-  // --- Reset Function ---
+  // ── NEW: Return to Main Menu ──────────────────────────────────────────────
+  const handleReturnToMain = async () => {
+    if (!sessionId) return;
+    try {
+      setIsLoading(true); setError(null); setCurrentContent(null);
+      const data = await returnToMainMenu(sessionId);
+      setMenuItems(data.menu_items);
+      setDebugCurrentDepth(0);
+      setHistory([`Topic: ${currentTopic}`]);
+    } catch (err) {
+      setError(err.message);
+    } finally { setIsLoading(false); }
+  };
+
+  // ── Reset whole session ───────────────────────────────────────────────────
   const handleReset = () => {
-    console.log("Resetting session");
-    setSessionId(null);
-    setMenuItems([]);
-    setIsLoading(false);
-    setError(null);
-    setCurrentTopic('');
-    setHistory([]);
-    setCurrentContent(null);
-    // *** NEW: Reset debug state ***
-    setDebugCurrentDepth(null);
-    setDebugMaxDepth(null);
-    setDebugLastGoBackMenu(null); // <-- RESET DEBUG STATE
-  }
+    setSessionId(null); setMenuItems([]);
+    setIsLoading(false); setError(null); setCurrentTopic('');
+    setHistory([]); setCurrentContent(null);
+    setDebugCurrentDepth(null); setDebugMaxDepth(null);
+  };
 
-  // --- Render Logic ---
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="container mx-auto p-4 max-w-3xl font-sans">
       <header className="text-center mb-6 border-b pb-4">
         <h1 className="text-3xl font-bold text-blue-700">AI Subject Explorer (APP)</h1>
-        {/* Navigation Buttons Container */}
+
         <div className="mt-2 flex justify-center space-x-4">
-          {/* Show Go Back button only if not on the first level */}
-          {sessionId && history.length > 1 && (
+          {sessionId && debugCurrentDepth > 0 && (
             <button
               onClick={handleGoBack}
-              disabled={isLoading} // Disable while loading
-              className="text-sm text-gray-500 hover:text-blue-600 underline disabled:text-gray-400 disabled:no-underline"
+              disabled={isLoading}
+              className="text-sm text-gray-500 hover:text-blue-600 underline disabled:text-gray-400"
             >
-              &larr; Go Back
+              ← Go Back
             </button>
           )}
-          {/* Start Over button */}
+
+          {sessionId && debugCurrentDepth > 0 && (
+            <button
+              onClick={handleReturnToMain}
+              disabled={isLoading}
+              className="text-sm text-gray-500 hover:text-green-600 underline disabled:text-gray-400"
+            >
+              ⇱ Main Menu
+            </button>
+          )}
+
           {sessionId && (
             <button
               onClick={handleReset}
-              disabled={isLoading} // Disable while loading
-              className="text-sm text-gray-500 hover:text-red-600 underline disabled:text-gray-400 disabled:no-underline"
+              disabled={isLoading}
+              className="text-sm text-gray-500 hover:text-red-600 underline disabled:text-gray-400"
             >
               Start Over
             </button>
@@ -219,94 +140,53 @@ function App() {
       </header>
 
       <main>
-        {isLoading && <div className="text-center p-4 text-blue-500 font-semibold">Loading...</div>}
-        {error && <div className="text-center p-3 mb-4 bg-red-100 text-red-700 rounded border border-red-300">Error: {error}</div>}
+        {isLoading && <div className="text-center text-blue-500">Loading…</div>}
+        {error && <div className="text-center text-red-600 mb-2">{error}</div>}
 
-        {/* Topic Input */}
-        {!isLoading && !error && !sessionId && (
+        {!isLoading && !sessionId && (
           <TopicInput onSubmit={handleTopicSubmit} />
         )}
 
-        {/* History, Content, and Menu Area */}
-        {!isLoading && !error && sessionId && (
+        {!isLoading && sessionId && (
           <div className="mt-4">
-            {/* History Path */}
-            {history.length > 0 && ( <div className='text-sm text-gray-600 mb-3 border-b pb-2 break-words'> Path: {history.join(' → ')} </div> )}
-
-            {/* Content Display */}
-            {/* Remember to uncomment and use ReactMarkdown or similar if needed */}
-            {currentContent && (
-              <div className="prose prose-sm sm:prose lg:prose-lg xl:prose-xl max-w-none bg-gray-50 p-4 rounded border mb-4">
-                  {/* Using basic div - replace with Markdown renderer if desired */}
-                  <pre style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>{currentContent}</pre>
-                  {/* Example using ReactMarkdown (if installed and imported): */}
-                  {/* <ReactMarkdown>{currentContent}</ReactMarkdown> */}
-                </div>
+            {history.length > 0 && (
+              <div className="text-sm text-gray-600 mb-3 border-b pb-2 break-words">
+                Path: {history.join(' → ')}
+              </div>
             )}
 
-            {/* Menu List */}
+            {currentContent && (
+              <div className="prose bg-gray-50 p-4 rounded border mb-4 max-w-none">
+                <pre style={{whiteSpace:'pre-wrap'}}>{currentContent}</pre>
+              </div>
+            )}
+
             {menuItems.length > 0 && (
               <div>
-                <h2 className="text-lg font-semibold mb-2">{currentContent ? "Further Exploration:" : "Select a category:"}</h2>
+                <h2 className="text-lg font-semibold mb-2">
+                  {currentContent ? "Further Exploration:" : "Select a category:"}
+                </h2>
                 <MenuList items={menuItems} onSelect={handleMenuSelection} />
               </div>
             )}
-            {/* Message when content is shown but no further topics */}
+
             {menuItems.length === 0 && currentContent && (
-                 <p className="text-center text-gray-500 mt-4">End of current exploration path.</p>
+              <p className="text-center text-gray-500 mt-4">
+                End of current exploration path.
+              </p>
             )}
           </div>
         )}
       </main>
 
-      {/* --- Debug Display --- */}
-      {/* Positioned fixed at bottom-left */}
-      <div style={{
-          position: 'fixed',
-          bottom: '10px',
-          left: '10px',
-          background: 'rgba(240, 240, 240, 0.9)',
-          padding: '5px 10px',
-          border: '1px solid #ccc',
-          borderRadius: '4px',
-          zIndex: 1000,
-          fontSize: '12px',
-          color: '#333',
-          maxWidth: 'calc(100vw - 20px)' // Prevent excessive width
-      }}>
-        <strong>Debug:</strong>
-        {sessionId && <span style={{ marginLeft: '10px' }}>Session: {sessionId.substring(0, 6)}..</span>}
-        {debugMaxDepth !== null && <span style={{ marginLeft: '10px' }}>MaxDepth: {debugMaxDepth}</span>}
-        {debugCurrentDepth !== null && <span style={{ marginLeft: '10px' }}>CurrentDepth: {debugCurrentDepth}</span>}
-
-        {/* Display Current Menu, allowing wrapping */}
-        {sessionId && menuItems.length > 0 && (
-          <span
-            title={`[${menuItems.join(', ')}]`} // Hover tooltip (may or may not work reliably)
-            style={{
-              marginLeft: '10px',
-              display: 'block', // Put it on a new line within the box
-              marginTop: '3px',
-              // Original truncation styles removed to allow wrapping like the GoBack menu
-              wordBreak: 'break-all', // Allow wrapping
-            }}>
-            Current Menu: [{menuItems.join(', ')}]
-          </span>
-        )}
-        {/* --- Display Last Go Back Menu --- */}
-        {debugLastGoBackMenu && (
-          <div style={{ marginTop: '5px', color: 'green', wordBreak: 'break-all', fontSize: '12px', fontWeight: 'bold' }}> {/* Enhanced styling */}
-            Last GoBack Menu: [{debugLastGoBackMenu.join(', ')}]
-          </div>
-        )}
-        {/* --- END OF Go Back Menu Display --- */}
-
-      </div>
-      {/* --- END Debug Display --- */}
-
+      {/* Debug footer */}
+      {sessionId && (
+        <div className="fixed bottom-2 left-2 bg-white/90 border px-3 py-1 text-xs rounded shadow">
+          Depth {debugCurrentDepth}/{debugMaxDepth}
+        </div>
+      )}
     </div>
   );
 }
 
 export default App;
-// *** End of App.jsx ***
