@@ -1,119 +1,208 @@
-// Real API Service - Makes fetch calls to the backend
+# *** main.py ***
 
-// Get the backend URL from environment variables (set in Render)
-// Fallback to localhost:8000 for potential local development later
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+import os
+import uuid
+import json
+from typing import List, Dict, Any, Optional, Tuple, Literal
 
-console.log(`API Base URL configured: ${API_BASE_URL}`); // Log for debugging deployment
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+import openai
 
-/**
- * Starts a new session by calling the backend API.
- * @param {string} topic - The initial topic from the user.
- * @returns {Promise<object>} - The response data ({ session_id, menu_items }).
- * @throws {Error} - Throws error on API failure.
- */
-export const startSession = async (topic) => {
-    console.log(`API CALL: POST /sessions with topic "${topic}" to ${API_BASE_URL}`);
-    try {
-        const response = await fetch(`${API_BASE_URL}/sessions`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ topic }),
-        });
 
-        const responseData = await response.json(); // Always try to parse JSON
+# --------------------------------------------------------------------------- #
+#                           Pydantic Models                                   #
+# --------------------------------------------------------------------------- #
 
-        if (!response.ok) {
-            // Use error message from backend if available, otherwise use HTTP status
-            const errorMessage = responseData.error?.message || `HTTP error! Status: ${response.status}`;
-            console.error("API Error Response:", responseData);
-            throw new Error(errorMessage);
+class TopicInput(BaseModel):
+    topic: str
+
+
+class MenuSelection(BaseModel):
+    session_id: str
+    selection: str
+
+
+class MenuResponse(BaseModel):
+    type: Literal["submenu", "content"]
+    menu_items: Optional[List[str]] = None  # Items for submenu or further topics
+    content: Optional[str] = None           # Markdown (only when type == "content")
+    session_id: str
+    current_depth: int
+    max_menu_depth: int
+
+
+class GoBackRequest(BaseModel):
+    """Payload for navigating one level up."""
+    session_id: str
+
+
+# --------------------------------------------------------------------------- #
+#                         Configuration & Init                                #
+# --------------------------------------------------------------------------- #
+
+load_dotenv()
+openai_client = None
+try:
+    openai_client = openai.OpenAI()
+    if not openai_client.api_key:
+        print("WARNING: OPENAI_API_KEY not found or empty.")
+        openai_client = None
+    else:
+        print("--- OpenAI client initialized successfully. ---")
+except Exception as e:
+    print(f"ERROR: Failed to initialize OpenAI client: {e}")
+    openai_client = None
+
+app = FastAPI(title="AI Subject Explorer Backend", version="0.6.0")
+
+origins = [
+    "https://ai-subject-explorer-app-frontend.onrender.com",
+    # add dev origins as needed
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --------------------------------------------------------------------------- #
+#                        In-Memory Session Store                              #
+# --------------------------------------------------------------------------- #
+# session_id -> {
+#   topic, history, current_menu, max_menu_depth,
+#   current_depth, last_content, menu_by_depth
+# }
+sessions: Dict[str, Dict[str, Any]] = {}
+
+
+# --------------------------------------------------------------------------- #
+#                      OpenAI Helper Functions                                #
+#   (generate_main_menu_with_ai, generate_submenu_with_ai,                    #
+#    generate_content_and_further_topics_with_ai) – unchanged                 #
+# --------------------------------------------------------------------------- #
+
+# ...  (Functions unchanged – omitted here for brevity.  Keep exactly as in your
+#       current repo.) ...
+
+
+# --------------------------------------------------------------------------- #
+#                               Endpoints                                     #
+# --------------------------------------------------------------------------- #
+
+@app.get("/")
+async def read_root():
+    return {"message": "AI Subject Explorer Backend is alive!"}
+
+
+# -----------------------------  /sessions  ---------------------------------- #
+@app.post(
+    "/sessions",
+    response_model=MenuResponse,
+    status_code=201,
+    summary="Start a new exploration session",
+    tags=["Session Management"],
+)
+async def create_session(topic_input: TopicInput):
+    # (Body identical to the version you supplied – no changes)
+    # ...
+
+
+# ------------------------------  /menus  ------------------------------------ #
+@app.post(
+    "/menus",
+    response_model=MenuResponse,
+    status_code=200,
+    summary="Process menu selection and get next items/content",
+    tags=["Navigation"],
+)
+async def select_menu_item(menu_selection: MenuSelection):
+    # (Body identical to the version you supplied – no changes)
+    # ...
+
+
+# -----------------------------  /go_back  ----------------------------------- #
+@app.post(
+    "/go_back",
+    response_model=MenuResponse,
+    status_code=200,
+    summary="Navigate back one level in the exploration menu",
+    tags=["Navigation"],
+)
+async def go_back(go_back_req: GoBackRequest):
+    session_id = go_back_req.session_id
+    print(f"--- Received POST /go_back for session '{session_id}' ---")
+
+    if session_id not in sessions:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "SESSION_NOT_FOUND",
+                              "message": "Session ID not found."}},
+        )
+
+    sd = sessions[session_id]
+    cur_depth = sd.get("current_depth", 0)
+    max_depth = sd.get("max_menu_depth", 0)
+
+    if cur_depth == 0:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "AT_ROOT_LEVEL",
+                              "message": "Already at top level; cannot go back."}},
+        )
+
+    prev_depth = cur_depth - 1
+    menu_by_depth: Dict[int, List[str]] = sd.get("menu_by_depth", {})
+
+    if prev_depth not in menu_by_depth:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": {"code": "STATE_INCONSISTENT",
+                              "message": "Previous menu missing."}},
+        )
+
+    # Trim last history item if it is a menu selection
+    hist = sd.get("history", [])
+    if hist and hist[-1][0] == "menu_selection":
+        hist.pop()
+
+    # Restore previous menu
+    sd.update(
+        {
+            "current_depth": prev_depth,
+            "current_menu": menu_by_depth[prev_depth],
+            "history": hist,
+            "last_content": None,
         }
+    )
+    sessions[session_id] = sd
 
-        console.log("API Success Response (/sessions):", responseData);
-        return responseData; // { session_id, menu_items }
+    print(
+        f"--- Session '{session_id}' back to depth {prev_depth} "
+        f"(menu items: {len(menu_by_depth[prev_depth])}) ---"
+    )
 
-    } catch (error) {
-        console.error("Network or parsing error starting session:", error);
-        // Re-throw the error so the component can catch it
-        // Provide a default message if the caught error has none
-        throw new Error(error.message || "Network error or invalid response from server.");
-    }
-};
+    return MenuResponse(
+        type="submenu",
+        menu_items=menu_by_depth[prev_depth],
+        content=None,
+        session_id=session_id,
+        current_depth=prev_depth,
+        max_menu_depth=max_depth,
+    )
 
-/**
- * Sends the user's menu selection to the backend API.
- * @param {string} sessionId - The current session ID.
- * @param {string} selection - The menu item text selected by the user.
- * @returns {Promise<object>} - The response data ({ menu_items }).
- * @throws {Error} - Throws error on API failure.
- */
-export const selectMenuItem = async (sessionId, selection) => {
-    console.log(`API CALL: POST /menus with session "${sessionId}" and selection "${selection}" to ${API_BASE_URL}`);
-    try {
-        const response = await fetch(`${API_BASE_URL}/menus`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ session_id: sessionId, selection }),
-        });
 
-        const responseData = await response.json(); // Always try to parse JSON
+# ------------------------------  runner  ------------------------------------ #
+if __name__ == "__main__":
+    import uvicorn
+    print("--- Starting Uvicorn (local) ---")
+    port = int(os.environ.get("PORT", 8000))
+    is_local_dev = os.environ.get("ENVIRONMENT", "production") == "development"
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=is_local_dev)
 
-        if (!response.ok) {
-            const errorMessage = responseData.error?.message || `HTTP error! Status: ${response.status}`;
-            console.error("API Error Response:", responseData);
-             // Specific handling for session not found might be useful
-             if (response.status === 404) {
-                 console.warn("Session potentially expired or invalid.");
-                 // Throw a specific error or let generic one handle? For now, generic.
-             }
-            throw new Error(errorMessage);
-        }
-
-        console.log("API Success Response (/menus):", responseData);
-        return responseData; // { menu_items }
-
-    } catch (error) {
-        console.error("Network or parsing error selecting menu item:", error);
-        throw new Error(error.message || "Network error or invalid response from server.");
-    }
-};
-
-/**
- * Sends a request to the backend to navigate back one level in the session.
- * @param {string} sessionId - The current session ID.
- * @returns {Promise<object>} - The promise resolving to the API response (should contain previous menu).
- */
-export const goBack = async (sessionId) => {
-  console.log(`API CALL: POST /menus (Go Back) for session "${sessionId}"`);
-  const response = await fetch(`${API_BASE_URL}/menus`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    // Send the special "__BACK__" marker as the selection
-    body: JSON.stringify({ session_id: sessionId, selection: "__BACK__" }),
-  });
-
-  if (!response.ok) {
-    // Attempt to read error details from response body
-    let errorData;
-    try {
-      errorData = await response.json();
-    } catch (e) {
-      // If response body is not JSON or empty
-      errorData = { message: `HTTP error! Status: ${response.status}` };
-    }
-    console.error("API Error Response (goBack):", errorData);
-    // Throw an error with message from backend if available, otherwise status text
-    throw new Error(errorData?.detail?.error?.message || errorData?.message || response.statusText);
-  }
-
-  const data = await response.json();
-  console.log("API Success Response (goBack):", data);
-  return data; // Should return { type: "submenu", menu_items: [...] }
-};
+# *** End of main.py ***
