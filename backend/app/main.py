@@ -335,6 +335,9 @@ async def select_menu_item(menu_selection: MenuSelection):
     current_depth = session_data.get("current_depth", -1)
     next_depth = current_depth + 1
     menu_by_depth_dict = session_data.get("menu_by_depth", {}) # Get existing dict
+    print(f"DEBUG: menu_by_depth now contains depths: {list(menu_by_depth_dict.keys())}")
+    # Or for more detail:
+    # print(f"DEBUG: menu_by_depth content: {menu_by_depth_dict}")
 
     if max_menu_depth is None or current_depth == -1:
          print(f"ERROR in /menus: Depth info missing/invalid. MaxDepth: {max_menu_depth}, CurrentDepth: {current_depth}")
