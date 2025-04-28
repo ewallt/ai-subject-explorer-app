@@ -271,21 +271,22 @@ function App() {
         {debugMaxDepth !== null && <span style={{ marginLeft: '10px' }}>MaxDepth: {debugMaxDepth}</span>}
         {debugCurrentDepth !== null && <span style={{ marginLeft: '10px' }}>CurrentDepth: {debugCurrentDepth}</span>}
 
-        {/* *** ADDED THIS PART *** */}
+        {/* Display Current Menu, truncated visually, with full list on hover */}
         {sessionId && menuItems.length > 0 && (
-          <span style={{
+          <span
+            title={`[${menuItems.join(', ')}]`} // *** ADDED TITLE ATTRIBUTE FOR HOVER ***
+            style={{
               marginLeft: '10px',
               display: 'block', // Put it on a new line within the box
               marginTop: '3px',
-              maxWidth: '300px', // Limit width of menu display
+              maxWidth: '300px', // Keep max width for visual truncation
               overflow: 'hidden',
               textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap' // Prevent wrapping
+              whiteSpace: 'nowrap' // Keep nowrap for truncation
             }}>
             Current Menu: [{menuItems.join(', ')}]
           </span>
         )}
-        {/* *** END ADDED PART *** */}
 
       </div>
       {/* --- END Debug Display --- */}
