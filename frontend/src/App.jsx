@@ -1,3 +1,4 @@
+// *** App.jsx (with debug display style update) ***
 import React, { useState, useEffect } from 'react';
 
 // Import the API functions (add goBack)
@@ -109,9 +110,9 @@ function App() {
        console.error("Error in handleMenuSelection calling selectMenuItem:", err);
        // Consider session reset on specific errors
         if (err.message && (err.message.includes("Session ID not found") || err.message.includes("404"))) {
-          handleReset();
-          setError("Session expired or invalid. Please start again.");
-        }
+         handleReset();
+         setError("Session expired or invalid. Please start again.");
+       }
     }
     finally { setIsLoading(false); }
   };
@@ -135,7 +136,7 @@ function App() {
       // Ensure your /go_back endpoint actually returns these fields
       setDebugCurrentDepth(data.current_depth);
       setDebugMaxDepth(data.max_menu_depth);
-       console.log("Received response from goBack: Type=", data.type, "Depth:", data.current_depth, "/", data.max_menu_depth);
+      console.log("Received response from goBack: Type=", data.type, "Depth:", data.current_depth, "/", data.max_menu_depth);
 
 
       // The backend should always return type="submenu" when going back
@@ -233,7 +234,7 @@ function App() {
                  <pre style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>{currentContent}</pre>
                  {/* Example using ReactMarkdown (if installed and imported): */}
                  {/* <ReactMarkdown>{currentContent}</ReactMarkdown> */}
-              </div>
+               </div>
             )}
 
             {/* Menu List */}
@@ -245,7 +246,7 @@ function App() {
             )}
             {/* Message when content is shown but no further topics */}
             {menuItems.length === 0 && currentContent && (
-                <p className="text-center text-gray-500 mt-4">End of current exploration path.</p>
+                 <p className="text-center text-gray-500 mt-4">End of current exploration path.</p>
             )}
           </div>
         )}
@@ -279,10 +280,13 @@ function App() {
               marginLeft: '10px',
               display: 'block', // Put it on a new line within the box
               marginTop: '3px',
-              maxWidth: '300px', // Keep max width for visual truncation
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap' // Keep nowrap for truncation
+              // *** MODIFIED STYLES START ***
+              maxWidth: '300px', // Limit width visually
+              overflow: 'hidden', // Hide overflow visually
+              /* Remove text-overflow and nowrap which might interfere with title */
+              // textOverflow: 'ellipsis', // Removed
+              // whiteSpace: 'nowrap' // Removed
+              // *** MODIFIED STYLES END ***
             }}>
             Current Menu: [{menuItems.join(', ')}]
           </span>
@@ -296,3 +300,4 @@ function App() {
 }
 
 export default App;
+// *** End of App.jsx ***
