@@ -1,4 +1,4 @@
-// *** App.jsx (Original code from session start) ***
+// *** App.jsx (Complete code with enhanced Go Back debug display) ***
 import React, { useState, useEffect } from 'react';
 
 // Import the API functions (add goBack)
@@ -30,6 +30,7 @@ function App() {
   // --- NEW: State for Debugging Depths ---
   const [debugCurrentDepth, setDebugCurrentDepth] = useState(null);
   const [debugMaxDepth, setDebugMaxDepth] = useState(null);
+  const [debugLastGoBackMenu, setDebugLastGoBackMenu] = useState(null); // <-- ADDED STATE
 
   // --- API Call Handlers ---
   const handleTopicSubmit = async (topic) => {
@@ -50,6 +51,7 @@ function App() {
     // *** NEW: Reset debug state ***
     setDebugCurrentDepth(null);
     setDebugMaxDepth(null);
+    setDebugLastGoBackMenu(null); // <-- RESET DEBUG STATE
 
     try {
       // Start session
@@ -84,6 +86,7 @@ function App() {
       // *** NEW: Update Debug State from /menus response ***
       setDebugCurrentDepth(data.current_depth);
       setDebugMaxDepth(data.max_menu_depth);
+      setDebugLastGoBackMenu(null); // <-- RESET DEBUG STATE ON FORWARD NAV
       console.log("Received response: Type=", data.type, "Depth:", data.current_depth, "/", data.max_menu_depth);
 
 
@@ -101,18 +104,18 @@ function App() {
       }
 
       // Update history only if not going back (Go Back handles its own history)
-       setHistory(prev => [...prev, `Selected: ${selection}`]);
-       console.log("Menu/Content updated via API");
+        setHistory(prev => [...prev, `Selected: ${selection}`]);
+        console.log("Menu/Content updated via API");
 
     } catch (err) {
-       const errorMsg = err.message || 'Failed to process selection.';
-       setError(errorMsg);
-       console.error("Error in handleMenuSelection calling selectMenuItem:", err);
-       // Consider session reset on specific errors
-        if (err.message && (err.message.includes("Session ID not found") || err.message.includes("404"))) {
-         handleReset();
-         setError("Session expired or invalid. Please start again.");
-       }
+        const errorMsg = err.message || 'Failed to process selection.';
+        setError(errorMsg);
+        console.error("Error in handleMenuSelection calling selectMenuItem:", err);
+        // Consider session reset on specific errors
+         if (err.message && (err.message.includes("Session ID not found") || err.message.includes("404"))) {
+           handleReset();
+           setError("Session expired or invalid. Please start again.");
+         }
     }
     finally { setIsLoading(false); }
   };
@@ -142,6 +145,7 @@ function App() {
       // The backend should always return type="submenu" when going back
       if (data.type === "submenu") {
         setMenuItems(data.menu_items || []);
+        setDebugLastGoBackMenu(data.menu_items || []); // <-- STORE RETURNED MENU FOR DEBUG
         // Remove the last item from frontend history to match backend state
         setHistory(prev => prev.slice(0, -1));
         console.log("Navigated back successfully.");
@@ -149,6 +153,7 @@ function App() {
         console.error("Received unexpected response type after going back:", data.type);
         setError("An unexpected error occurred while navigating back.");
         setMenuItems([]); // Clear menu on unexpected error
+        setDebugLastGoBackMenu(null); // <-- CLEAR DEBUG ON ERROR
       }
 
     } catch (err) {
@@ -158,6 +163,7 @@ function App() {
       console.error("Error in handleGoBack calling goBack API:", err);
       if (err.message && (err.message.includes("Session ID not found") || err.message.includes("404"))) {
         handleReset();
+        // No need to clear debugLastGoBackMenu here, handleReset does it
         setError("Session expired or invalid. Please start again.");
       }
     } finally {
@@ -179,6 +185,7 @@ function App() {
     // *** NEW: Reset debug state ***
     setDebugCurrentDepth(null);
     setDebugMaxDepth(null);
+    setDebugLastGoBackMenu(null); // <-- RESET DEBUG STATE
   }
 
   // --- Render Logic ---
@@ -230,11 +237,11 @@ function App() {
             {/* Remember to uncomment and use ReactMarkdown or similar if needed */}
             {currentContent && (
               <div className="prose prose-sm sm:prose lg:prose-lg xl:prose-xl max-w-none bg-gray-50 p-4 rounded border mb-4">
-                 {/* Using basic div - replace with Markdown renderer if desired */}
-                 <pre style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>{currentContent}</pre>
-                 {/* Example using ReactMarkdown (if installed and imported): */}
-                 {/* <ReactMarkdown>{currentContent}</ReactMarkdown> */}
-               </div>
+                  {/* Using basic div - replace with Markdown renderer if desired */}
+                  <pre style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>{currentContent}</pre>
+                  {/* Example using ReactMarkdown (if installed and imported): */}
+                  {/* <ReactMarkdown>{currentContent}</ReactMarkdown> */}
+                </div>
             )}
 
             {/* Menu List */}
@@ -272,22 +279,27 @@ function App() {
         {debugMaxDepth !== null && <span style={{ marginLeft: '10px' }}>MaxDepth: {debugMaxDepth}</span>}
         {debugCurrentDepth !== null && <span style={{ marginLeft: '10px' }}>CurrentDepth: {debugCurrentDepth}</span>}
 
-        {/* Display Current Menu, truncated visually, with full list on hover */}
+        {/* Display Current Menu, allowing wrapping */}
         {sessionId && menuItems.length > 0 && (
           <span
-            title={`[${menuItems.join(', ')}]`} // *** Original hover attempt ***
+            title={`[${menuItems.join(', ')}]`} // Hover tooltip (may or may not work reliably)
             style={{
               marginLeft: '10px',
               display: 'block', // Put it on a new line within the box
               marginTop: '3px',
-              maxWidth: '300px', // Keep max width for visual truncation
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap' // Keep nowrap for truncation
+              // Original truncation styles removed to allow wrapping like the GoBack menu
+              wordBreak: 'break-all', // Allow wrapping
             }}>
             Current Menu: [{menuItems.join(', ')}]
           </span>
         )}
+        {/* --- Display Last Go Back Menu --- */}
+        {debugLastGoBackMenu && (
+          <div style={{ marginTop: '5px', color: 'green', wordBreak: 'break-all', fontSize: '12px', fontWeight: 'bold' }}> {/* Enhanced styling */}
+            Last GoBack Menu: [{debugLastGoBackMenu.join(', ')}]
+          </div>
+        )}
+        {/* --- END OF Go Back Menu Display --- */}
 
       </div>
       {/* --- END Debug Display --- */}
