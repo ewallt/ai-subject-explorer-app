@@ -23,14 +23,14 @@ class MenuSelection(BaseModel):
     selection: str
 
 
-class SessionRequest(BaseModel):  # used by /main_menu
+class SessionRequest(BaseModel):        # for /main_menu and /go_back
     session_id: str
 
 
 class MenuResponse(BaseModel):
     type: Literal["submenu", "content"]
-    menu_items: Optional[List[str]] = None   # submenu or further-topics list
-    content: Optional[str] = None            # markdown (only for "content")
+    menu_items: Optional[List[str]] = None
+    content: Optional[str] = None
     session_id: str
     current_depth: int
     max_menu_depth: int
@@ -52,9 +52,8 @@ except Exception as e:
     print(f"ERROR initialising OpenAI client: {e}")
     openai_client = None
 
-app = FastAPI(title="AI Subject Explorer Backend", version="0.6.1")
+app = FastAPI(title="AI Subject Explorer Backend", version="0.6.2")
 
-# CORS – allow frontend and local dev origins
 origins = [
     "https://ai-subject-explorer-app-frontend.onrender.com",
     "https://ai-subject-explorer-app-frontend.onrender.com/",
@@ -72,31 +71,22 @@ app.add_middleware(
 # ──────────────────────────────────────────────────────────────
 # In-memory sessions
 # ──────────────────────────────────────────────────────────────
-# session_id → {
-#   topic, history, current_menu, max_menu_depth, current_depth,
-#   last_content, menu_by_depth
-# }
 sessions: Dict[str, Dict[str, Any]] = {}
 
 # ──────────────────────────────────────────────────────────────
-# OpenAI helper functions
+# OpenAI helper functions (unchanged)
 # ──────────────────────────────────────────────────────────────
 def generate_main_menu_with_ai(topic: str) -> Tuple[List[str], int]:
-    """Return (menu_items, max_menu_depth)."""
     if not openai_client:
         return (
-            [
-                f"Introduction to {topic}",
-                f"Key Concepts in {topic}",
-                f"History of {topic}",
-            ],
+            [f"Introduction to {topic}", f"Key Concepts in {topic}", f"History of {topic}"],
             2,
         )
 
     model_name = "gpt-4.1-nano"
     content_instruction = (
         f"You are an assistant designing a hierarchical exploration menu for '{topic}'. "
-        "Generate 3–7 broad categories and pick an appropriate maximum depth (2-4)."
+        "Generate 3–7 broad categories and choose an appropriate maximum depth (2-4)."
     )
     json_instruction = (
         "Return ONLY JSON with keys 'categories' (list) and 'max_menu_depth' (int)."
@@ -121,14 +111,13 @@ def generate_main_menu_with_ai(topic: str) -> Tuple[List[str], int]:
 
 
 def generate_submenu_with_ai(topic: str, category: str) -> List[str]:
-    """Return a list of subtopics."""
     if not openai_client:
         return [f"Subtopic 1 of {category}", f"Subtopic 2 of {category}"]
 
     model_name = "gpt-4.1-nano"
     sys_msg = (
-        f"You are building subtopics for '{category}' inside main topic '{topic}'. "
-        "Return ONLY JSON {'subtopics':[...]} with 3-7 items."
+        f"Generate 3-7 subtopics inside '{category}' (main topic '{topic}'). "
+        "Return ONLY JSON {'subtopics':[...]}."
     )
     completion = openai_client.chat.completions.create(
         model=model_name,
@@ -142,25 +131,22 @@ def generate_submenu_with_ai(topic: str, category: str) -> List[str]:
 
 
 def generate_content_and_further_topics_with_ai(
-    topic: str,
-    history: List[Tuple[str, str]],
-    selection: str,
+    topic: str, history: List[Tuple[str, str]], selection: str
 ) -> Tuple[str, List[str]]:
-    """Return (markdown_content, further_topics)."""
     if not openai_client:
-        md = (
+        fallback_md = (
             f"## {selection}\n\n*(fallback – OpenAI unavailable)*\n\n"
             f"Details about **{selection}** within **{topic}**."
         )
-        return md, ["Related Topic A", "Related Topic B", "Go Deeper"]
+        return fallback_md, ["Related Topic A", "Related Topic B", "Go Deeper"]
 
     path_list = [h[1] for h in history if h[0] == "menu_selection"] + [selection]
     nav_path = " -> ".join([topic] + path_list)
     model_name = "gpt-4.1-nano"
     sys_msg = (
-        "You are an assistant generating markdown content and 3-5 further topics.\n"
+        "Generate a 2-4 paragraph markdown summary and 3-5 further-topic suggestions.\n"
         f"User navigation path: {nav_path}\n"
-        "Return ONLY JSON {content_markdown: str, further_topics: list}."
+        "Return ONLY JSON {content_markdown:str, further_topics:list}."
     )
     completion = openai_client.chat.completions.create(
         model=model_name,
@@ -190,15 +176,9 @@ async def read_root():
 
 @app.post("/sessions", response_model=MenuResponse, status_code=201)
 async def create_session(topic_input: TopicInput):
-    """Start a new exploration session."""
     topic = topic_input.topic
     session_id = str(uuid.uuid4())
-    print(f"✱ /sessions → new session {session_id} | topic='{topic}'")
-
-    try:
-        main_menu, max_depth = generate_main_menu_with_ai(topic)
-    except Exception as e:
-        raise HTTPException(503, f"AI menu generation failed: {e}")
+    main_menu, max_depth = generate_main_menu_with_ai(topic)
 
     sessions[session_id] = {
         "topic": topic,
@@ -222,7 +202,6 @@ async def create_session(topic_input: TopicInput):
 
 @app.post("/menus", response_model=MenuResponse, status_code=200)
 async def select_menu_item(menu_selection: MenuSelection):
-    """Navigate forward by selecting a menu item."""
     session_id = menu_selection.session_id
     selection = menu_selection.selection
     if session_id not in sessions:
@@ -230,70 +209,59 @@ async def select_menu_item(menu_selection: MenuSelection):
 
     s = sessions[session_id]
     topic = s["topic"]
-    current_depth = s["current_depth"]
+    curr_depth = s["current_depth"]
     max_depth = s["max_menu_depth"]
-    next_depth = current_depth + 1
+    next_depth = curr_depth + 1
 
     if selection not in s["current_menu"]:
         raise HTTPException(400, f"Selection '{selection}' not in current menu.")
 
-    try:
-        # still below max depth → generate submenu
-        if next_depth < max_depth:
-            submenu = generate_submenu_with_ai(topic, selection)
-            s["history"].append(("menu_selection", selection))
-            s["current_menu"] = submenu
-            s["current_depth"] = next_depth
-            s["last_content"] = None
-            s["menu_by_depth"][next_depth] = submenu
-            sessions[session_id] = s
-
-            return MenuResponse(
-                type="submenu",
-                menu_items=submenu,
-                content=None,
-                session_id=session_id,
-                current_depth=next_depth,
-                max_menu_depth=max_depth,
-            )
-
-        # reached or exceeded max depth → generate content
-        md, further = generate_content_and_further_topics_with_ai(
-            topic, s["history"], selection
-        )
+    # Sub-menu mode
+    if next_depth < max_depth:
+        submenu = generate_submenu_with_ai(topic, selection)
         s["history"].append(("menu_selection", selection))
-        s["current_menu"] = further
+        s["current_menu"] = submenu
         s["current_depth"] = next_depth
-        s["last_content"] = md
-        s["menu_by_depth"][next_depth] = further
+        s["last_content"] = None
+        s["menu_by_depth"][next_depth] = submenu
         sessions[session_id] = s
-
         return MenuResponse(
-            type="content",
-            menu_items=further,
-            content=md,
+            type="submenu",
+            menu_items=submenu,
+            content=None,
             session_id=session_id,
             current_depth=next_depth,
             max_menu_depth=max_depth,
         )
 
-    except Exception as e:
-        raise HTTPException(503, f"AI generation failed: {e}")
+    # Content mode
+    md, further = generate_content_and_further_topics_with_ai(
+        topic, s["history"], selection
+    )
+    s["history"].append(("menu_selection", selection))
+    s["current_menu"] = further
+    s["current_depth"] = next_depth
+    s["last_content"] = md
+    s["menu_by_depth"][next_depth] = further
+    sessions[session_id] = s
+    return MenuResponse(
+        type="content",
+        menu_items=further,
+        content=md,
+        session_id=session_id,
+        current_depth=next_depth,
+        max_menu_depth=max_depth,
+    )
 
 
 @app.post("/main_menu", response_model=MenuResponse, status_code=200)
 async def return_to_main_menu(req: SessionRequest):
-    """Reset session to depth 0 and return the root menu."""
     session_id = req.session_id
     if session_id not in sessions:
         raise HTTPException(404, "Session ID not found.")
 
     s = sessions[session_id]
-    root_menu = s.get("menu_by_depth", {}).get(0, [])
-    if not root_menu:
-        root_menu = s.get("current_menu", [])
-        print("⚠ root_menu missing; fallback to current_menu")
-
+    root_menu = s["menu_by_depth"].get(0, s["current_menu"])
     s["current_menu"] = root_menu
     s["current_depth"] = 0
     s["last_content"] = None
@@ -306,6 +274,53 @@ async def return_to_main_menu(req: SessionRequest):
         content=None,
         session_id=session_id,
         current_depth=0,
+        max_menu_depth=s["max_menu_depth"],
+    )
+
+
+# ─────────── NEW /go_back endpoint ───────────
+@app.post("/go_back", response_model=MenuResponse, status_code=200)
+async def go_back_one_level(req: SessionRequest):
+    """
+    Step back one depth level. Returns the previous menu.
+    If already at depth 0, returns the same root menu.
+    """
+    session_id = req.session_id
+    if session_id not in sessions:
+        raise HTTPException(404, "Session ID not found.")
+
+    s = sessions[session_id]
+    current_depth = s["current_depth"]
+
+    if current_depth == 0:
+        # Already at root – just echo the root menu
+        root_menu = s["menu_by_depth"][0]
+        return MenuResponse(
+            type="submenu",
+            menu_items=root_menu,
+            content=None,
+            session_id=session_id,
+            current_depth=0,
+            max_menu_depth=s["max_menu_depth"],
+        )
+
+    prev_depth = current_depth - 1
+    prev_menu = s["menu_by_depth"][prev_depth]
+
+    # Trim history and reset state
+    if s["history"] and s["history"][-1][0] == "menu_selection":
+        s["history"].pop()  # remove last selection
+    s["current_menu"] = prev_menu
+    s["current_depth"] = prev_depth
+    s["last_content"] = None
+    sessions[session_id] = s
+
+    return MenuResponse(
+        type="submenu",
+        menu_items=prev_menu,
+        content=None,
+        session_id=session_id,
+        current_depth=prev_depth,
         max_menu_depth=s["max_menu_depth"],
     )
 
