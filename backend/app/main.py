@@ -84,7 +84,7 @@ sessions: Dict[str, Dict[str, Any]] = {}
 @app.get("/")
 async def root():
     return {
-        "message": "AI Subject Explorer Backend is alive!",
+        "message": "AI Subject Explorer Backend is alive! Test.",
         "version": app.version,
         "openai_ready": openai_client is not None,
         "active_sessions": len(sessions),
